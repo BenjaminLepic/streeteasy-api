@@ -89,15 +89,15 @@ export interface OrganicRentalEdge {
     __typename: string;
     node: SearchRentalListing;
     amenitiesMatch: boolean;
-    matchedAmenities: string[];
-    missingAmenities: string[];
+    matchedAmenities: string[] | null;
+    missingAmenities: string[] | null;
 }
 export interface FeaturedRentalEdge {
     __typename: string;
     node: SearchRentalListing;
     amenitiesMatch: boolean;
-    matchedAmenities: string[];
-    missingAmenities: string[];
+    matchedAmenities: string[] | null;
+    missingAmenities: string[] | null;
 }
 export interface SponsoredRentalEdge {
     __typename: string;
@@ -123,6 +123,7 @@ export interface SearchFilters {
     bedrooms?: NumberRange;
     bathrooms?: NumberRange;
     amenities?: Amenity[];
+    optionalAmenities?: Amenity[];
     petsAllowed?: boolean;
 }
 export interface Sorting {

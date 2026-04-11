@@ -69,8 +69,8 @@ async function main() {
       
       if (isOrganicOrFeaturedEdge(firstEdge)) {
         console.log(`- Amenities Match: ${firstEdge.amenitiesMatch ? 'Yes' : 'No'}`);
-        console.log(`- Matched Amenities: ${firstEdge.matchedAmenities.length}`);
-        console.log(`- Missing Amenities: ${firstEdge.missingAmenities.length}`);
+        console.log(`- Matched Amenities: ${firstEdge.matchedAmenities?.length ?? 0}`);
+        console.log(`- Missing Amenities: ${firstEdge.missingAmenities?.length ?? 0}`);
       }
       
       if (isSponsoredEdge(firstEdge)) {

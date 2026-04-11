@@ -478,7 +478,7 @@ describe("StreetEasyClient", () => {
         if (isOrganicOrFeaturedEdge(edge)) {
           expect(edge.amenitiesMatch).toBe(true);
           expect(edge.matchedAmenities).toContain("DISHWASHER");
-          expect(edge.missingAmenities.length).toBe(0);
+          expect(edge.missingAmenities?.length).toBe(0);
         } else {
           fail("Edge should be recognized as OrganicRentalEdge");
         }
@@ -580,7 +580,7 @@ describe("StreetEasyClient", () => {
         // Verify we can access FeaturedRentalEdge specific properties
         if (isOrganicOrFeaturedEdge(edge)) {
           expect(edge.amenitiesMatch).toBe(false);
-          expect(edge.matchedAmenities.length).toBe(0);
+          expect(edge.matchedAmenities?.length).toBe(0);
           expect(edge.missingAmenities).toContain("DOORMAN");
         } else {
           fail("Edge should be recognized as FeaturedRentalEdge");

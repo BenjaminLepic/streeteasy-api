@@ -119,16 +119,16 @@ export interface OrganicRentalEdge {
   __typename: string;
   node: SearchRentalListing;
   amenitiesMatch: boolean;
-  matchedAmenities: string[];
-  missingAmenities: string[];
+  matchedAmenities: string[] | null;
+  missingAmenities: string[] | null;
 }
 
 export interface FeaturedRentalEdge {
   __typename: string;
   node: SearchRentalListing;
   amenitiesMatch: boolean;
-  matchedAmenities: string[];
-  missingAmenities: string[];
+  matchedAmenities: string[] | null;
+  missingAmenities: string[] | null;
 }
 
 export interface SponsoredRentalEdge {
