@@ -13,8 +13,7 @@ yarn add streeteasy-api
 ## Usage
 
 ```typescript
-import { StreetEasyClient } from 'streeteasy-api';
-import { Areas, Amenities } from 'streeteasy-api/constants';
+import { StreetEasyClient, Areas, Amenities } from 'streeteasy-api';
 
 // Create a client
 const client = new StreetEasyClient();

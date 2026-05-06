@@ -1,6 +1,10 @@
-import { StreetEasyClient } from '../src';
-import { Areas, Amenities } from '../src/constants';
-import { OrganicRentalEdge, FeaturedRentalEdge, SponsoredRentalEdge } from '../src/types';
+import {
+  StreetEasyClient,
+  Areas,
+  OrganicRentalEdge,
+  FeaturedRentalEdge,
+  SponsoredRentalEdge,
+} from '../src';
 
 // Type guards for different edge types
 function isOrganicOrFeaturedEdge(edge: any): edge is OrganicRentalEdge | FeaturedRentalEdge {

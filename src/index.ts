@@ -106,5 +106,6 @@ export class StreetEasyClient {
   }
 }
 
-// Export types
+// Export types and constants for external use
 export * from "./types";
+export * from "./constants";

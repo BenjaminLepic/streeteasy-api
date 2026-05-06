@@ -92,5 +92,6 @@ class StreetEasyClient {
     }
 }
 exports.StreetEasyClient = StreetEasyClient;
-// Export types
+// Export types and constants for external use
 __exportStar(require("./types"), exports);
+__exportStar(require("./constants"), exports);
