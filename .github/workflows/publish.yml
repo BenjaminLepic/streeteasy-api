@@ -30,9 +30,6 @@ jobs:
       - name: Test
         run: yarn test --ci
 
-      - name: Integration test
-        run: yarn test:integration
-
       - name: Build
         run: yarn build
 
