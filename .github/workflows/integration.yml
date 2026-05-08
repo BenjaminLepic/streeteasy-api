@@ -1,13 +1,12 @@
 name: Integration
 
 on:
-  schedule:
-    - cron: '0 7 * * *'
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    paths:
-      - 'examples/integration-test.ts'
-      - 'src/**'
+  schedule:
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
