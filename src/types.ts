@@ -162,6 +162,7 @@ export interface SearchFilters {
   bedrooms?: NumberRange;
   bathrooms?: NumberRange;
   amenities?: Amenity[];
+  optionalAmenities?: Amenity[];
   petsAllowed?: boolean;
 }
 
