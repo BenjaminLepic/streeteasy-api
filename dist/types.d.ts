@@ -116,6 +116,13 @@ export interface NumberRange {
     lowerBound: number | null;
     upperBound: number | null;
 }
+export type Available = {
+    startDate: string;
+    endDate: null;
+} | {
+    startDate: null;
+    endDate: string;
+};
 export interface SearchFilters {
     areas?: AreaCode[];
     rentalStatus?: "ACTIVE";
@@ -125,6 +132,7 @@ export interface SearchFilters {
     amenities?: Amenity[];
     optionalAmenities?: Amenity[];
     petsAllowed?: boolean;
+    available?: Available;
 }
 export interface Sorting {
     attribute: "RECOMMENDED" | "PRICE" | "DATE_LISTED";
