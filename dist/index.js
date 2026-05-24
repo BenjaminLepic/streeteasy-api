@@ -66,21 +66,26 @@ class StreetEasyClient {
         }
     }
     /**
-     * Search for rental listings
+     * Search for rental listings.
+     *
+     * Note on implementation: the StreetEasy GraphQL server rejects enum values
+     * sent as JSON strings in query variables (e.g. `sorting.attribute`,
+     * `rentalStatus`, `adStrategy`). We therefore build the query with all enum
+     * values inlined as bare GraphQL tokens via `buildSearchRentalsQuery`, and
+     * issue the request without variables. This mirrors how the StreetEasy
+     * frontend calls the same endpoint.
+     *
      * @param input Search parameters
      * @returns Search results
      */
     async searchRentals(input) {
-        // Set default adStrategy to 'NONE' if not provided
-        // Set default userSearchToken to a UUID if not provided
         const inputWithDefaults = {
             ...input,
             adStrategy: input.adStrategy || "NONE",
             userSearchToken: input.userSearchToken || (0, uuid_1.v4)(),
         };
-        return this.request(queries_1.SEARCH_RENTALS_QUERY, {
-            input: inputWithDefaults,
-        });
+        const query = (0, queries_1.buildSearchRentalsQuery)(inputWithDefaults);
+        return this.request(query);
     }
     /**
      * Get detailed information about a specific rental listing

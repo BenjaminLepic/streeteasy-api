@@ -1,51 +1,17 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RENTAL_LISTING_DETAILS_QUERY = exports.SEARCH_RENTALS_QUERY = void 0;
-exports.SEARCH_RENTALS_QUERY = `
-query SearchRentalsFederated($input: SearchRentalsInput!) {
-  searchRentals(input: $input) {
-    __typename
-    edges {
-      __typename
-      ... on OrganicRentalEdge {
-        node {
-          __typename
-          ...RentalListingDigestForSearchResults
-        }
-        amenitiesMatch
-        matchedAmenities
-        missingAmenities
-      }
-      ... on FeaturedRentalEdge {
-        node {
-          __typename
-          ...RentalListingDigestForSearchResults
-        }
-        amenitiesMatch
-        matchedAmenities
-        missingAmenities
-      }
-      ... on SponsoredRentalEdge {
-        node {
-          __typename
-          ...RentalListingDigestForSearchResults
-        }
-        sponsoredSimilarityLabel
-      }
-    }
-    totalCount
-  }
-}
+exports.RENTAL_LISTING_DETAILS_QUERY = exports.SEARCH_RENTALS_QUERY = exports.SEARCH_RENTALS_FRAGMENTS = void 0;
+exports.gqlValue = gqlValue;
+exports.buildSearchRentalsQuery = buildSearchRentalsQuery;
+/**
+ * Fragments shared by the search query. Kept as a top-level constant so it
+ * can also be referenced by callers building custom queries via `client.request()`.
+ */
+exports.SEARCH_RENTALS_FRAGMENTS = `
 fragment LeadMediaForSRP on LeadMedia {
   __typename
-  photo {
-    __typename
-    key
-  }
-  floorPlan {
-    __typename
-    key
-  }
+  photo { __typename key }
+  floorPlan { __typename key }
 }
 fragment OpenHouseForSRP on OpenHouseDigest {
   __typename
@@ -62,19 +28,12 @@ fragment RentalListingDigestForSearchResults on SearchRentalListing {
   buildingType
   fullBathroomCount
   furnished
-  geoPoint {
-    __typename
-    latitude
-    longitude
-  }
+  geoPoint { __typename latitude longitude }
   halfBathroomCount
   hasTour3d
   hasVideos
   isNewDevelopment
-  leadMedia {
-    __typename
-    ...LeadMediaForSRP
-  }
+  leadMedia { __typename ...LeadMediaForSRP }
   leaseTermMonths
   livingAreaSize
   mediaAssetCount
@@ -82,10 +41,7 @@ fragment RentalListingDigestForSearchResults on SearchRentalListing {
   noFee
   netEffectivePrice
   offMarketAt
-  photos {
-    __typename
-    key
-  }
+  photos { __typename key }
   price
   priceChangedAt
   priceDelta
@@ -95,12 +51,185 @@ fragment RentalListingDigestForSearchResults on SearchRentalListing {
   status
   street
   unit
-  upcomingOpenHouse {
-    __typename
-    ...OpenHouseForSRP
-  }
+  upcomingOpenHouse { __typename ...OpenHouseForSRP }
   urlPath
 }
+`;
+const ENUM_RE = /^[A-Z_][A-Z0-9_]*$/;
+/**
+ * Serialize a JavaScript value as a GraphQL literal.
+ *
+ * We have to render enum values as bare identifiers (e.g. `LISTED_AT`), because
+ * the StreetEasy server rejects them when sent as JSON strings in query
+ * variables (it expects raw GraphQL enum tokens). This mirrors how the
+ * StreetEasy frontend calls the API.
+ */
+function gqlValue(value, opts = {}) {
+    if (value === null || value === undefined)
+        return "null";
+    if (typeof value === "number") {
+        if (!Number.isFinite(value)) {
+            throw new Error(`Cannot serialize non-finite number: ${value}`);
+        }
+        return String(value);
+    }
+    if (typeof value === "boolean")
+        return value ? "true" : "false";
+    if (Array.isArray(value)) {
+        return `[${value.map((v) => gqlValue(v, opts)).join(", ")}]`;
+    }
+    if (typeof value === "string") {
+        if (opts.enum) {
+            if (!ENUM_RE.test(value)) {
+                throw new Error(`Invalid GraphQL enum value: ${JSON.stringify(value)} — expected uppercase identifier`);
+            }
+            return value;
+        }
+        // GraphQL string literal — same encoding as JSON string
+        return JSON.stringify(value);
+    }
+    if (typeof value === "object") {
+        // Generic object → not used directly; callers should use the typed helpers
+        const entries = Object.entries(value)
+            .filter(([, v]) => v !== undefined)
+            .map(([k, v]) => `${k}: ${gqlValue(v)}`);
+        return `{ ${entries.join(", ")} }`;
+    }
+    throw new Error(`Unsupported type for GraphQL serialization: ${typeof value}`);
+}
+function gqlNumberRange(r) {
+    if (!r)
+        return null;
+    return `{ lowerBound: ${gqlValue(r.lowerBound)}, upperBound: ${gqlValue(r.upperBound)} }`;
+}
+function gqlAvailable(a) {
+    if (!a)
+        return null;
+    return `{ startDate: ${gqlValue(a.startDate)}, endDate: ${gqlValue(a.endDate)} }`;
+}
+function gqlFilters(f) {
+    const parts = [];
+    if (f.areas !== undefined)
+        parts.push(`areas: [${f.areas.join(", ")}]`);
+    if (f.rentalStatus !== undefined) {
+        parts.push(`rentalStatus: ${gqlValue(f.rentalStatus, { enum: true })}`);
+    }
+    if (f.price !== undefined)
+        parts.push(`price: ${gqlNumberRange(f.price)}`);
+    if (f.bedrooms !== undefined)
+        parts.push(`bedrooms: ${gqlNumberRange(f.bedrooms)}`);
+    if (f.bathrooms !== undefined)
+        parts.push(`bathrooms: ${gqlNumberRange(f.bathrooms)}`);
+    if (f.amenities !== undefined) {
+        const list = f.amenities.map((a) => gqlValue(a, { enum: true })).join(", ");
+        parts.push(`amenities: [${list}]`);
+    }
+    if (f.optionalAmenities !== undefined) {
+        const list = f.optionalAmenities
+            .map((a) => gqlValue(a, { enum: true }))
+            .join(", ");
+        parts.push(`optionalAmenities: [${list}]`);
+    }
+    if (f.petsAllowed !== undefined)
+        parts.push(`petsAllowed: ${gqlValue(f.petsAllowed)}`);
+    if (f.available !== undefined)
+        parts.push(`available: ${gqlAvailable(f.available)}`);
+    return `{ ${parts.join(", ")} }`;
+}
+function gqlSorting(s) {
+    return `{ attribute: ${gqlValue(s.attribute, { enum: true })}, direction: ${gqlValue(s.direction, { enum: true })} }`;
+}
+/**
+ * Build the SearchRentalsFederated query with enum values inlined.
+ *
+ * Why this exists: the StreetEasy GraphQL server rejects enum values sent as
+ * JSON strings in query variables (see e.g. `SortingAttributeInput`,
+ * `RentalStatus`, `AdStrategy`). Rendering the entire input inline with bare
+ * enum tokens is how the StreetEasy frontend calls the API, and the only
+ * shape the server accepts today.
+ */
+function buildSearchRentalsQuery(input) {
+    const sorting = input.sorting ?? {
+        attribute: "RECOMMENDED",
+        direction: "DESCENDING",
+    };
+    const inputParts = [
+        `sorting: ${gqlSorting(sorting)}`,
+        `filters: ${gqlFilters(input.filters)}`,
+        `adStrategy: ${gqlValue(input.adStrategy, { enum: true })}`,
+        `userSearchToken: ${gqlValue(input.userSearchToken)}`,
+    ];
+    if (input.perPage !== undefined)
+        inputParts.push(`perPage: ${gqlValue(input.perPage)}`);
+    if (input.page !== undefined)
+        inputParts.push(`page: ${gqlValue(input.page)}`);
+    const inputLiteral = `{ ${inputParts.join(", ")} }`;
+    return `
+query SearchRentalsFederated {
+  searchRentals(input: ${inputLiteral}) {
+    __typename
+    edges {
+      __typename
+      ... on OrganicRentalEdge {
+        node { __typename ...RentalListingDigestForSearchResults }
+        amenitiesMatch
+        matchedAmenities
+        missingAmenities
+      }
+      ... on FeaturedRentalEdge {
+        node { __typename ...RentalListingDigestForSearchResults }
+        amenitiesMatch
+        matchedAmenities
+        missingAmenities
+      }
+      ... on SponsoredRentalEdge {
+        node { __typename ...RentalListingDigestForSearchResults }
+        sponsoredSimilarityLabel
+      }
+    }
+    totalCount
+  }
+}
+${exports.SEARCH_RENTALS_FRAGMENTS}
+`;
+}
+/**
+ * @deprecated The StreetEasy server changed to require enum literals inline
+ * for `sorting.attribute`, `sorting.direction`, `rentalStatus`, `adStrategy`,
+ * and `amenities`. Querying with this static template and JSON-stringified
+ * enums in variables will fail with `VALIDATION_INVALID_TYPE_VARIABLE`.
+ *
+ * Use `buildSearchRentalsQuery(input)` instead, or pass a hand-built query
+ * to `client.request()`. This export is preserved only so the shape of
+ * fragments stays available for callers building custom queries.
+ */
+exports.SEARCH_RENTALS_QUERY = `
+query SearchRentalsFederated($input: SearchRentalsInput!) {
+  searchRentals(input: $input) {
+    __typename
+    edges {
+      __typename
+      ... on OrganicRentalEdge {
+        node { __typename ...RentalListingDigestForSearchResults }
+        amenitiesMatch
+        matchedAmenities
+        missingAmenities
+      }
+      ... on FeaturedRentalEdge {
+        node { __typename ...RentalListingDigestForSearchResults }
+        amenitiesMatch
+        matchedAmenities
+        missingAmenities
+      }
+      ... on SponsoredRentalEdge {
+        node { __typename ...RentalListingDigestForSearchResults }
+        sponsoredSimilarityLabel
+      }
+    }
+    totalCount
+  }
+}
+${exports.SEARCH_RENTALS_FRAGMENTS}
 `;
 exports.RENTAL_LISTING_DETAILS_QUERY = `
   query RentalListingDetailsFederated($listingID: ID!) {

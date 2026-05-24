@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const graphql_request_1 = require("graphql-request");
 const index_1 = require("../index");
+const constants_1 = require("../constants");
 const queries_1 = require("../queries");
 // Type guard functions - imported from examples for testing
 function isOrganicOrFeaturedEdge(edge) {
@@ -26,6 +27,17 @@ jest.mock("graphql-request");
 jest.mock("uuid", () => ({
     v4: jest.fn(() => "mock-uuid"),
 }));
+// Helpers to inspect the last call to the mocked GraphQL `request()`.
+// `searchRentals()` now builds a dynamic query string (with enum tokens
+// inlined) instead of passing a static query + variables, so tests check
+// substrings of the rendered query rather than identity equality.
+function getLastRequestCall(mockedRequest) {
+    const calls = mockedRequest.mock.calls;
+    if (!calls.length)
+        throw new Error("request() was not called");
+    const last = calls[calls.length - 1];
+    return { query: last[0], variables: last[1] };
+}
 describe("StreetEasyClient", () => {
     let client;
     beforeEach(() => {
@@ -174,7 +186,7 @@ describe("StreetEasyClient", () => {
         beforeEach(() => {
             client = new index_1.StreetEasyClient();
         });
-        it("should make rental search request", async () => {
+        it("should make rental search request with inlined enum defaults", async () => {
             const mockClient = {
                 request: jest.fn().mockResolvedValue({
                     searchRentals: {
@@ -185,18 +197,15 @@ describe("StreetEasyClient", () => {
             };
             graphql_request_1.GraphQLClient.mockImplementation(() => mockClient);
             client = new index_1.StreetEasyClient();
-            const params = {
-                filters: {},
-            };
-            const response = await client.searchRentals(params);
+            const response = await client.searchRentals({ filters: {} });
             expect(response.searchRentals).toBeDefined();
-            expect(mockClient.request).toHaveBeenCalledWith(queries_1.SEARCH_RENTALS_QUERY, {
-                input: {
-                    ...params,
-                    adStrategy: "NONE",
-                    userSearchToken: "mock-uuid",
-                },
-            });
+            const { query, variables } = getLastRequestCall(mockClient.request);
+            // Enums must be inline GraphQL tokens, not JSON strings:
+            expect(query).toContain("sorting: { attribute: RECOMMENDED, direction: DESCENDING }");
+            expect(query).toContain("adStrategy: NONE");
+            expect(query).toContain('userSearchToken: "mock-uuid"');
+            // No variables are sent — input is fully inlined.
+            expect(variables).toBeUndefined();
         });
         it("should handle search errors", async () => {
             const mockClient = {
@@ -220,19 +229,12 @@ describe("StreetEasyClient", () => {
             };
             graphql_request_1.GraphQLClient.mockImplementation(() => mockClient);
             client = new index_1.StreetEasyClient();
-            const params = {
-                filters: {},
-            };
-            await client.searchRentals(params);
-            expect(mockClient.request).toHaveBeenCalledWith(queries_1.SEARCH_RENTALS_QUERY, {
-                input: {
-                    ...params,
-                    adStrategy: "NONE",
-                    userSearchToken: "mock-uuid",
-                },
-            });
+            await client.searchRentals({ filters: {} });
+            const { query } = getLastRequestCall(mockClient.request);
+            expect(query).toContain("adStrategy: NONE");
+            expect(query).toContain('userSearchToken: "mock-uuid"');
         });
-        it("should not override adStrategy if already provided", async () => {
+        it("should respect a custom userSearchToken when provided", async () => {
             const mockClient = {
                 request: jest.fn().mockResolvedValue({
                     searchRentals: {
@@ -243,40 +245,57 @@ describe("StreetEasyClient", () => {
             };
             graphql_request_1.GraphQLClient.mockImplementation(() => mockClient);
             client = new index_1.StreetEasyClient();
-            const params = {
-                filters: {},
-                adStrategy: "NONE",
-            };
-            await client.searchRentals(params);
-            expect(mockClient.request).toHaveBeenCalledWith(queries_1.SEARCH_RENTALS_QUERY, {
-                input: {
-                    ...params,
-                    userSearchToken: "mock-uuid",
-                },
-            });
-        });
-        it("should not override userSearchToken if already provided", async () => {
-            const mockClient = {
-                request: jest.fn().mockResolvedValue({
-                    searchRentals: {
-                        totalCount: 1,
-                        edges: [],
-                    },
-                }),
-            };
-            graphql_request_1.GraphQLClient.mockImplementation(() => mockClient);
-            client = new index_1.StreetEasyClient();
-            const params = {
+            await client.searchRentals({
                 filters: {},
                 userSearchToken: "custom-token",
+            });
+            const { query } = getLastRequestCall(mockClient.request);
+            expect(query).toContain('userSearchToken: "custom-token"');
+            expect(query).not.toContain('"mock-uuid"');
+        });
+        it("should serialize sorting attribute LISTED_AT as inline enum token", async () => {
+            const mockClient = {
+                request: jest.fn().mockResolvedValue({
+                    searchRentals: { totalCount: 0, edges: [] },
+                }),
             };
-            await client.searchRentals(params);
-            expect(mockClient.request).toHaveBeenCalledWith(queries_1.SEARCH_RENTALS_QUERY, {
-                input: {
-                    ...params,
-                    adStrategy: "NONE",
+            graphql_request_1.GraphQLClient.mockImplementation(() => mockClient);
+            client = new index_1.StreetEasyClient();
+            await client.searchRentals({
+                filters: {},
+                sorting: { attribute: "LISTED_AT", direction: "DESCENDING" },
+            });
+            const { query, variables } = getLastRequestCall(mockClient.request);
+            // The enum value must appear as a bare token, never as a JSON string.
+            expect(query).toContain("sorting: { attribute: LISTED_AT, direction: DESCENDING }");
+            expect(query).not.toContain('"LISTED_AT"');
+            expect(variables).toBeUndefined();
+        });
+        it("should serialize filter enums (rentalStatus, amenities) inline", async () => {
+            const mockClient = {
+                request: jest.fn().mockResolvedValue({
+                    searchRentals: { totalCount: 0, edges: [] },
+                }),
+            };
+            graphql_request_1.GraphQLClient.mockImplementation(() => mockClient);
+            client = new index_1.StreetEasyClient();
+            await client.searchRentals({
+                filters: {
+                    areas: [constants_1.Areas.MANHATTAN, constants_1.Areas.QUEENS],
+                    rentalStatus: "ACTIVE",
+                    amenities: [constants_1.Amenities.WASHER_DRYER, constants_1.Amenities.DOORMAN],
+                    price: { lowerBound: 2000, upperBound: 5000 },
+                    petsAllowed: true,
                 },
             });
+            const { query } = getLastRequestCall(mockClient.request);
+            expect(query).toContain("areas: [100, 400]");
+            expect(query).toContain("rentalStatus: ACTIVE");
+            expect(query).not.toContain('"ACTIVE"');
+            expect(query).toContain("amenities: [WASHER_DRYER, DOORMAN]");
+            expect(query).not.toContain('"WASHER_DRYER"');
+            expect(query).toContain("price: { lowerBound: 2000, upperBound: 5000 }");
+            expect(query).toContain("petsAllowed: true");
         });
         // Additional tests for the new federated search rentals query structure
         describe("Federated search edge types", () => {
@@ -1318,5 +1337,120 @@ describe("StreetEasyClient", () => {
             expect(response.buildingByRentalListingId.type).toBe("CONDO");
             expect(response.getRentalListingExpressById.hasActiveBuildingShowcase).toBe(false);
         });
+    });
+});
+describe("gqlValue (GraphQL literal serializer)", () => {
+    it("serializes numbers", () => {
+        expect((0, queries_1.gqlValue)(0)).toBe("0");
+        expect((0, queries_1.gqlValue)(42)).toBe("42");
+        expect((0, queries_1.gqlValue)(-3.14)).toBe("-3.14");
+    });
+    it("throws on non-finite numbers", () => {
+        expect(() => (0, queries_1.gqlValue)(NaN)).toThrow();
+        expect(() => (0, queries_1.gqlValue)(Infinity)).toThrow();
+    });
+    it("serializes booleans", () => {
+        expect((0, queries_1.gqlValue)(true)).toBe("true");
+        expect((0, queries_1.gqlValue)(false)).toBe("false");
+    });
+    it("serializes null and undefined as null", () => {
+        expect((0, queries_1.gqlValue)(null)).toBe("null");
+        expect((0, queries_1.gqlValue)(undefined)).toBe("null");
+    });
+    it("serializes strings with JSON escaping", () => {
+        expect((0, queries_1.gqlValue)("hello")).toBe('"hello"');
+        expect((0, queries_1.gqlValue)('with "quotes"')).toBe('"with \\"quotes\\""');
+        expect((0, queries_1.gqlValue)("with\nnewline")).toBe('"with\\nnewline"');
+    });
+    it("serializes uppercase identifiers as bare enum tokens when enum=true", () => {
+        expect((0, queries_1.gqlValue)("ACTIVE", { enum: true })).toBe("ACTIVE");
+        expect((0, queries_1.gqlValue)("LISTED_AT", { enum: true })).toBe("LISTED_AT");
+        expect((0, queries_1.gqlValue)("WASHER_DRYER", { enum: true })).toBe("WASHER_DRYER");
+    });
+    it("rejects invalid enum identifiers", () => {
+        expect(() => (0, queries_1.gqlValue)("lowercase", { enum: true })).toThrow();
+        expect(() => (0, queries_1.gqlValue)("With Space", { enum: true })).toThrow();
+        expect(() => (0, queries_1.gqlValue)("Mixed_Case", { enum: true })).toThrow();
+    });
+    it("serializes arrays recursively", () => {
+        expect((0, queries_1.gqlValue)([1, 2, 3])).toBe("[1, 2, 3]");
+        expect((0, queries_1.gqlValue)(["a", "b"])).toBe('["a", "b"]');
+        expect((0, queries_1.gqlValue)(["ACTIVE", "PENDING"], { enum: true })).toBe("[ACTIVE, PENDING]");
+    });
+});
+describe("buildSearchRentalsQuery", () => {
+    it("defaults sorting to RECOMMENDED DESCENDING", () => {
+        const q = (0, queries_1.buildSearchRentalsQuery)({
+            filters: {},
+            adStrategy: "NONE",
+            userSearchToken: "tkn",
+        });
+        expect(q).toContain("sorting: { attribute: RECOMMENDED, direction: DESCENDING }");
+    });
+    it("respects a custom sorting", () => {
+        const q = (0, queries_1.buildSearchRentalsQuery)({
+            filters: {},
+            sorting: { attribute: "PRICE", direction: "ASCENDING" },
+            adStrategy: "NONE",
+            userSearchToken: "tkn",
+        });
+        expect(q).toContain("sorting: { attribute: PRICE, direction: ASCENDING }");
+    });
+    it("inlines area codes and number ranges", () => {
+        const q = (0, queries_1.buildSearchRentalsQuery)({
+            filters: {
+                areas: [100, 300],
+                price: { lowerBound: 1500, upperBound: null },
+                bedrooms: { lowerBound: null, upperBound: 2 },
+            },
+            adStrategy: "NONE",
+            userSearchToken: "tkn",
+        });
+        expect(q).toContain("areas: [100, 300]");
+        expect(q).toContain("price: { lowerBound: 1500, upperBound: null }");
+        expect(q).toContain("bedrooms: { lowerBound: null, upperBound: 2 }");
+    });
+    it("emits perPage and page only when provided", () => {
+        const withPagination = (0, queries_1.buildSearchRentalsQuery)({
+            filters: {},
+            adStrategy: "NONE",
+            userSearchToken: "tkn",
+            perPage: 25,
+            page: 3,
+        });
+        expect(withPagination).toContain("perPage: 25");
+        expect(withPagination).toContain("page: 3");
+        const withoutPagination = (0, queries_1.buildSearchRentalsQuery)({
+            filters: {},
+            adStrategy: "NONE",
+            userSearchToken: "tkn",
+        });
+        expect(withoutPagination).not.toMatch(/perPage:/);
+        expect(withoutPagination).not.toMatch(/page:/);
+    });
+    it("never emits enum values as JSON strings", () => {
+        const q = (0, queries_1.buildSearchRentalsQuery)({
+            filters: {
+                rentalStatus: "ACTIVE",
+                amenities: ["WASHER_DRYER", "DOORMAN"],
+            },
+            sorting: { attribute: "LISTED_AT", direction: "DESCENDING" },
+            adStrategy: "NONE",
+            userSearchToken: "tkn",
+        });
+        expect(q).not.toContain('"ACTIVE"');
+        expect(q).not.toContain('"LISTED_AT"');
+        expect(q).not.toContain('"DESCENDING"');
+        expect(q).not.toContain('"NONE"');
+        expect(q).not.toContain('"WASHER_DRYER"');
+    });
+    it("escapes user-controlled string values (e.g. userSearchToken)", () => {
+        const q = (0, queries_1.buildSearchRentalsQuery)({
+            filters: {},
+            adStrategy: "NONE",
+            userSearchToken: 'abc"); evil',
+        });
+        // Quote inside the value must be escaped, otherwise the query breaks.
+        expect(q).toContain('userSearchToken: "abc\\"); evil"');
     });
 });

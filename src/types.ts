@@ -171,9 +171,20 @@ export interface SearchFilters {
   available?: Available;
 }
 
+/**
+ * Sort attributes accepted by the StreetEasy `SortingAttributeInput` enum.
+ *
+ * Note: `DATE_LISTED` was renamed to `LISTED_AT` server-side. The valid set
+ * was discovered empirically (introspection is disabled). Passing any other
+ * value will result in `Value "X" does not exist in "SortingAttributeInput" enum.`
+ */
+export type SortingAttribute = "RECOMMENDED" | "LISTED_AT" | "PRICE" | "SQFT";
+
+export type SortingDirection = "ASCENDING" | "DESCENDING";
+
 export interface Sorting {
-  attribute: "RECOMMENDED" | "PRICE" | "DATE_LISTED";
-  direction: "ASCENDING" | "DESCENDING";
+  attribute: SortingAttribute;
+  direction: SortingDirection;
 }
 
 export interface SearchRentalsInput {
