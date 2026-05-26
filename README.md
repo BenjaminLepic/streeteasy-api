@@ -2,6 +2,25 @@
 
 A TypeScript GraphQL client for the StreetEasy API.
 
+## Changes in 0.4.0
+
+The StreetEasy server now rejects enum values sent as JSON strings in query
+variables (e.g. `sorting.attribute`, `rentalStatus`, `adStrategy`, `amenities`).
+0.3.0 fails with `VALIDATION_INVALID_TYPE_VARIABLE` because of this.
+
+Fix in 0.4.0: `searchRentals()` builds the query with all enum values inlined
+as bare GraphQL tokens via a new `buildSearchRentalsQuery(input)` helper, and
+issues the request without variables. The public API of `searchRentals()` is
+unchanged.
+
+Breaking type change: `Sorting.attribute` is now
+`"RECOMMENDED" | "LISTED_AT" | "PRICE" | "SQFT"`. The previous `"DATE_LISTED"`
+was renamed to `"LISTED_AT"` server-side.
+
+The old static `SEARCH_RENTALS_QUERY` constant is still exported but marked
+`@deprecated`; calling the server with it will fail. Use
+`buildSearchRentalsQuery(input)` (or `client.searchRentals(...)`) instead.
+
 ## Installation
 
 ```bash
@@ -23,7 +42,8 @@ async function searchRentals() {
   try {
     const response = await client.searchRentals({
       sorting: {
-        attribute: 'RECOMMENDED',
+        // Valid attributes today: RECOMMENDED | LISTED_AT | PRICE | SQFT
+        attribute: 'LISTED_AT',
         direction: 'DESCENDING'
       },
       filters: {
