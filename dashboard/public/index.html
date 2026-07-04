@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="A first-24-hours dashboard for StreetEasy rental listings."
+    />
+    <meta name="theme-color" content="#1749c6" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="First Look" />
+    <title>First Look — NYC rental watch</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/styles.css?v=20260704" />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+      defer
+    ></script>
+    <script src="/app.js?v=20260704" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#results">Skip to listings</a>
+
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="First Look home">
+        <span class="brand-mark" aria-hidden="true">FL</span>
+        <span>
+          <strong>First Look</strong>
+          <small>NYC rental watch</small>
+        </span>
+      </a>
+      <div class="sync">
+        <span class="sync-dot" aria-hidden="true"></span>
+        <span id="sync-label">Ready to scan</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">The public market, without the delay</p>
+          <h1 id="page-title">The first 24 hours, in one view.</h1>
+          <p>
+            Track rentals from the moment they become active. Compare the signal,
+            open the listing, move quickly.
+          </p>
+        </div>
+        <div class="hero-window" aria-hidden="true">
+          <span>Search window</span>
+          <strong id="hero-hours">24</strong>
+          <small>hours</small>
+        </div>
+      </section>
+
+      <div class="workspace">
+        <aside class="filters" aria-labelledby="filter-title">
+          <button
+            class="mobile-filter-toggle"
+            id="mobile-filter-toggle"
+            type="button"
+            aria-controls="filter-form"
+            aria-expanded="false"
+          >
+            <span class="mobile-filter-label">
+              <small>Search brief</small>
+              <strong>Filters</strong>
+            </span>
+            <span class="mobile-filter-summary" id="mobile-filter-summary">
+              $3,000–$4,500 · 12 areas · 24h
+            </span>
+            <span class="mobile-filter-icon" aria-hidden="true">+</span>
+          </button>
+          <form id="filter-form">
+            <div class="filter-heading">
+              <div>
+                <p class="section-kicker">Search brief</p>
+                <h2 id="filter-title">Your criteria</h2>
+              </div>
+              <button class="text-button" type="button" id="reset-filters">
+                Reset
+              </button>
+            </div>
+
+            <fieldset>
+              <legend>Neighborhoods</legend>
+              <div class="area-chips" id="area-chips"></div>
+              <div class="add-area-row">
+                <label class="sr-only" for="add-area">Add neighborhood</label>
+                <select id="add-area">
+                  <option value="">Add neighborhood…</option>
+                </select>
+                <button class="icon-button" id="add-area-button" type="button">
+                  Add
+                </button>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Monthly rent</legend>
+              <div class="field-pair">
+                <label>
+                  <span>Minimum</span>
+                  <span class="money-input">
+                    <i>$</i>
+                    <input
+                      id="min-price"
+                      name="minPrice"
+                      type="number"
+                      min="0"
+                      step="100"
+                      value="3000"
+                      inputmode="numeric"
+                    />
+                  </span>
+                </label>
+                <label>
+                  <span>Maximum</span>
+                  <span class="money-input">
+                    <i>$</i>
+                    <input
+                      id="max-price"
+                      name="maxPrice"
+                      type="number"
+                      min="0"
+                      step="100"
+                      value="4500"
+                      inputmode="numeric"
+                    />
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Avenue B boundary</legend>
+              <div class="segmented-control">
+                <label>
+                  <input
+                    type="radio"
+                    name="avenueBSide"
+                    value="west"
+                    checked
+                  />
+                  <span>West / on</span>
+                </label>
+                <label>
+                  <input type="radio" name="avenueBSide" value="any" />
+                  <span>Anywhere</span>
+                </label>
+                <label>
+                  <input type="radio" name="avenueBSide" value="east" />
+                  <span>East only</span>
+                </label>
+              </div>
+              <p class="boundary-note">
+                Uses each listing’s map pin against Avenue B’s angled
+                <a
+                  href="https://www.openstreetmap.org/copyright"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >OpenStreetMap</a>
+                centerline.
+              </p>
+            </fieldset>
+
+            <fieldset>
+              <legend>Space</legend>
+              <div class="field-pair">
+                <label>
+                  <span>Bedrooms</span>
+                  <select id="min-bedrooms" name="minBedrooms">
+                    <option value="">Any</option>
+                    <option value="0">Studio+</option>
+                    <option value="1">1+</option>
+                    <option value="2">2+</option>
+                    <option value="3">3+</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Bathrooms</span>
+                  <select id="min-bathrooms" name="minBathrooms">
+                    <option value="">Any</option>
+                    <option value="1">1+</option>
+                    <option value="1.5">1.5+</option>
+                    <option value="2">2+</option>
+                  </select>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Must-haves</legend>
+              <div class="check-grid">
+                <label class="check-control">
+                  <input type="checkbox" id="no-fee" />
+                  <span>No fee</span>
+                </label>
+                <label class="check-control">
+                  <input type="checkbox" id="pets-allowed" />
+                  <span>Pets allowed</span>
+                </label>
+                <label class="check-control">
+                  <input
+                    type="checkbox"
+                    name="amenity"
+                    value="WASHER_DRYER"
+                  />
+                  <span>Washer/dryer</span>
+                </label>
+                <label class="check-control">
+                  <input
+                    type="checkbox"
+                    name="amenity"
+                    value="DISHWASHER"
+                  />
+                  <span>Dishwasher</span>
+                </label>
+                <label class="check-control">
+                  <input type="checkbox" name="amenity" value="ELEVATOR" />
+                  <span>Elevator</span>
+                </label>
+                <label class="check-control">
+                  <input type="checkbox" name="amenity" value="DOORMAN" />
+                  <span>Doorman</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Freshness</legend>
+              <label class="range-label" for="hours">
+                <span>Listed in the past</span>
+                <output id="hours-output" for="hours">24 hours</output>
+              </label>
+              <input
+                class="range"
+                id="hours"
+                name="hours"
+                type="range"
+                min="1"
+                max="72"
+                step="1"
+                value="24"
+              />
+            </fieldset>
+
+            <button class="primary-button" type="submit">
+              <span>Scan new listings</span>
+              <span aria-hidden="true">→</span>
+            </button>
+            <p class="filter-note">
+              Manual refresh is intentional: repeated automated requests may be
+              limited by StreetEasy.
+            </p>
+          </form>
+        </aside>
+
+        <section class="results" id="results" aria-labelledby="results-title">
+          <div class="results-heading">
+            <div class="results-title-group">
+              <p class="section-kicker">Live arrivals</p>
+              <h2 id="results-title">
+                <span id="result-count">—</span>
+                <span id="result-label">matching rentals</span>
+              </h2>
+              <div class="view-switch" role="group" aria-label="Results view">
+                <button
+                  class="is-active"
+                  id="list-view-button"
+                  type="button"
+                  aria-pressed="true"
+                >
+                  List
+                </button>
+                <button
+                  id="map-view-button"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  Map
+                </button>
+              </div>
+              <button
+                class="polygon-status"
+                id="polygon-status"
+                type="button"
+                aria-label="Clear polygon focus"
+                hidden
+              ></button>
+            </div>
+            <div class="results-actions">
+              <label class="sort-control">
+                <span>Order</span>
+                <select id="sort-order">
+                  <option value="newest">Newest first</option>
+                  <option value="value">Strongest price signal</option>
+                  <option value="price-asc">Lowest rent</option>
+                </select>
+              </label>
+              <button
+                class="liked-filter"
+                id="liked-only"
+                type="button"
+                aria-pressed="false"
+                disabled
+              >
+                Liked (0)
+              </button>
+              <button
+                class="restore-hidden"
+                id="restore-hidden"
+                type="button"
+                disabled
+              >
+                Restore hidden
+              </button>
+              <button class="clear-viewed" id="clear-viewed" type="button" disabled>
+                Clear viewed
+              </button>
+            </div>
+          </div>
+
+          <section class="market-tape" aria-labelledby="tape-title">
+            <div class="tape-heading">
+              <h3 id="tape-title">Activation tape</h3>
+              <p>Each marker is one rental becoming publicly active.</p>
+            </div>
+            <div class="timeline" id="timeline">
+              <div class="timeline-track" aria-hidden="true"></div>
+              <div class="timeline-markers" id="timeline-markers"></div>
+              <div
+                class="timeline-labels"
+                id="timeline-labels"
+                aria-hidden="true"
+              >
+                <span>Now</span>
+                <span>6h</span>
+                <span>12h</span>
+                <span>18h</span>
+                <span>24h</span>
+              </div>
+            </div>
+          </section>
+
+          <div class="notice" id="notice" role="status" hidden></div>
+          <section class="map-view" id="map-view" aria-label="Map view" hidden>
+            <div class="map-polygon-tools">
+              <button
+                class="draw-polygon"
+                id="draw-polygon"
+                type="button"
+                aria-pressed="false"
+              >
+                Draw polygon
+              </button>
+              <button
+                class="undo-polygon"
+                id="undo-polygon"
+                type="button"
+                disabled
+              >
+                Undo
+              </button>
+              <button
+                class="finish-polygon"
+                id="finish-polygon"
+                type="button"
+                disabled
+              >
+                Finish shape
+              </button>
+              <button
+                class="clear-polygon"
+                id="clear-polygon"
+                type="button"
+                disabled
+              >
+                Clear
+              </button>
+              <span class="polygon-instruction" id="polygon-instruction">
+                Click Draw, then place at least three points.
+              </span>
+            </div>
+            <div
+              class="listing-map"
+              id="listing-map"
+              role="region"
+              aria-label="Map of matching rentals"
+            ></div>
+            <div class="map-selection" id="map-selection"></div>
+          </section>
+          <div class="listing-grid" id="listing-grid" aria-live="polite">
+            <div class="empty-state">
+              <span class="empty-mark" aria-hidden="true">24</span>
+              <h3>Ready for the first scan</h3>
+              <p>
+                Your downtown neighborhoods and $3,000–$4,500 budget are already
+                loaded.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <template id="listing-template">
+      <article class="listing-card">
+        <div class="listing-visual">
+          <img class="listing-photo" alt="" loading="lazy" />
+          <span class="listing-index"></span>
+          <button
+            class="like-button"
+            type="button"
+            aria-label="Like listing"
+            aria-pressed="false"
+          >
+            <span aria-hidden="true">♡</span>
+          </button>
+          <button class="hide-button" type="button" aria-label="Hide listing">
+            Hide
+          </button>
+        </div>
+        <div class="listing-main">
+          <div class="listing-topline">
+            <span class="listed-age"></span>
+            <span class="value-badge" hidden></span>
+            <span class="viewed-badge" hidden>Viewed</span>
+          </div>
+          <h3 class="listing-address"></h3>
+          <p class="listing-area"></p>
+          <div class="listing-facts"></div>
+          <div class="listing-flags"></div>
+        </div>
+        <div class="listing-price-block">
+          <strong class="listing-price"></strong>
+          <span class="net-price"></span>
+          <a class="listing-link" target="_blank" rel="noopener noreferrer">
+            Open listing
+            <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>

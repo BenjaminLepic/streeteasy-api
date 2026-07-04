@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="132" fill="#1749c6"/>
+  <path d="M0 386 386 0h126v126L126 512H0Z" fill="#0e3190" opacity=".42"/>
+  <circle cx="405" cy="107" r="36" fill="#ff5a35"/>
+  <text
+    x="256"
+    y="306"
+    fill="#fff"
+    font-family="Arial Narrow, Arial, sans-serif"
+    font-size="166"
+    font-weight="800"
+    letter-spacing="-12"
+    text-anchor="middle"
+  >FL</text>
+</svg>

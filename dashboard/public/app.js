@@ -1,0 +1,992 @@
+const AREAS = [
+  { id: 105, name: "Tribeca" },
+  { id: 106, name: "Stuyvesant Town/PCV" },
+  { id: 107, name: "Soho" },
+  { id: 108, name: "Little Italy" },
+  { id: 110, name: "Chinatown" },
+  { id: 112, name: "Battery Park City" },
+  { id: 115, name: "Chelsea" },
+  { id: 116, name: "Greenwich Village" },
+  { id: 117, name: "East Village" },
+  { id: 146, name: "Hudson Yards" },
+  { id: 157, name: "West Village" },
+  { id: 162, name: "Nolita" },
+];
+
+const VIEWED_STORAGE_KEY = "first-look:viewed-listings:v1";
+const LIKED_STORAGE_KEY = "first-look:liked-listings:v1";
+const HIDDEN_STORAGE_KEY = "first-look:hidden-listings:v1";
+
+function loadStoredIds(storageKey) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(storageKey) || "[]");
+    return new Set(Array.isArray(stored) ? stored.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveStoredIds(storageKey, ids) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify([...ids]));
+  } catch {
+    // The visible state still works when storage is unavailable.
+  }
+}
+
+const state = {
+  selectedAreas: new Set(AREAS.map((area) => area.id)),
+  listings: [],
+  sort: "newest",
+  loading: false,
+  likedOnly: false,
+  view: "list",
+  map: null,
+  mapLayer: null,
+  mapMarkers: new Map(),
+  mapListingSignature: "",
+  selectedMapListingId: null,
+  drawingPolygon: false,
+  polygonPoints: [],
+  polygonShape: null,
+  polygonVertices: null,
+  viewedListings: loadStoredIds(VIEWED_STORAGE_KEY),
+  likedListings: loadStoredIds(LIKED_STORAGE_KEY),
+  hiddenListings: loadStoredIds(HIDDEN_STORAGE_KEY),
+};
+
+const elements = {
+  addArea: document.querySelector("#add-area"),
+  addAreaButton: document.querySelector("#add-area-button"),
+  areaChips: document.querySelector("#area-chips"),
+  clearPolygon: document.querySelector("#clear-polygon"),
+  clearViewed: document.querySelector("#clear-viewed"),
+  drawPolygon: document.querySelector("#draw-polygon"),
+  finishPolygon: document.querySelector("#finish-polygon"),
+  filterForm: document.querySelector("#filter-form"),
+  heroHours: document.querySelector("#hero-hours"),
+  hours: document.querySelector("#hours"),
+  hoursOutput: document.querySelector("#hours-output"),
+  listingGrid: document.querySelector("#listing-grid"),
+  listingTemplate: document.querySelector("#listing-template"),
+  likedOnly: document.querySelector("#liked-only"),
+  listViewButton: document.querySelector("#list-view-button"),
+  listingMap: document.querySelector("#listing-map"),
+  mapSelection: document.querySelector("#map-selection"),
+  mapView: document.querySelector("#map-view"),
+  mapViewButton: document.querySelector("#map-view-button"),
+  mobileFilterSummary: document.querySelector("#mobile-filter-summary"),
+  mobileFilterToggle: document.querySelector("#mobile-filter-toggle"),
+  notice: document.querySelector("#notice"),
+  polygonInstruction: document.querySelector("#polygon-instruction"),
+  polygonStatus: document.querySelector("#polygon-status"),
+  resetFilters: document.querySelector("#reset-filters"),
+  restoreHidden: document.querySelector("#restore-hidden"),
+  resultCount: document.querySelector("#result-count"),
+  resultLabel: document.querySelector("#result-label"),
+  sortOrder: document.querySelector("#sort-order"),
+  sync: document.querySelector(".sync"),
+  syncLabel: document.querySelector("#sync-label"),
+  timelineLabels: document.querySelector("#timeline-labels"),
+  timelineMarkers: document.querySelector("#timeline-markers"),
+  undoPolygon: document.querySelector("#undo-polygon"),
+};
+
+const currency = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+const mobileViewport = window.matchMedia("(max-width: 700px)");
+
+function formatFilterPrice(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) && value !== ""
+    ? currency.format(amount)
+    : "Any";
+}
+
+function updateMobileFilterSummary() {
+  const minPrice = document.querySelector("#min-price").value;
+  const maxPrice = document.querySelector("#max-price").value;
+  const price =
+    minPrice || maxPrice
+      ? `${formatFilterPrice(minPrice)}–${formatFilterPrice(maxPrice)}`
+      : "Any rent";
+  elements.mobileFilterSummary.textContent =
+    `${price} · ${state.selectedAreas.size} ${
+      state.selectedAreas.size === 1 ? "area" : "areas"
+    } · ${elements.hours.value}h`;
+}
+
+function setMobileFiltersOpen(open) {
+  document.querySelector(".filters").classList.toggle("is-open", open);
+  elements.mobileFilterToggle.setAttribute("aria-expanded", String(open));
+}
+
+function renderAreas() {
+  elements.areaChips.replaceChildren();
+
+  AREAS.filter((area) => state.selectedAreas.has(area.id)).forEach((area) => {
+    const chip = document.createElement("button");
+    chip.className = "area-chip";
+    chip.type = "button";
+    chip.textContent = area.name;
+    chip.setAttribute("aria-label", `Remove ${area.name}`);
+    chip.addEventListener("click", () => {
+      if (state.selectedAreas.size === 1) {
+        showNotice("Keep at least one neighborhood in the search.");
+        return;
+      }
+      state.selectedAreas.delete(area.id);
+      renderAreas();
+    });
+    elements.areaChips.append(chip);
+  });
+
+  const previousValue = elements.addArea.value;
+  elements.addArea.replaceChildren(new Option("Add neighborhood…", ""));
+  AREAS.filter((area) => !state.selectedAreas.has(area.id)).forEach((area) => {
+    elements.addArea.add(new Option(area.name, String(area.id)));
+  });
+  if (previousValue && !state.selectedAreas.has(Number(previousValue))) {
+    elements.addArea.value = previousValue;
+  }
+  updateMobileFilterSummary();
+}
+
+function addSelectedArea() {
+  const id = Number(elements.addArea.value);
+  if (!id) return;
+  state.selectedAreas.add(id);
+  renderAreas();
+}
+
+function setLoading(loading) {
+  state.loading = loading;
+  const button = elements.filterForm.querySelector(".primary-button");
+  button.disabled = loading;
+  button.querySelector("span:first-child").textContent = loading
+    ? "Scanning StreetEasy…"
+    : "Scan new listings";
+  elements.sync.classList.toggle("is-loading", loading);
+  if (loading) {
+    elements.sync.classList.remove("is-live");
+    elements.syncLabel.textContent = "Scanning now";
+    elements.listingGrid.innerHTML = Array.from(
+      { length: 4 },
+      () => '<div class="skeleton" aria-hidden="true"></div>',
+    ).join("");
+  }
+}
+
+function showNotice(message = "") {
+  elements.notice.hidden = !message;
+  elements.notice.textContent = message;
+}
+
+function buildSearchParams() {
+  const formData = new FormData(elements.filterForm);
+  const params = new URLSearchParams({
+    areas: [...state.selectedAreas].join(","),
+    hours: elements.hours.value,
+  });
+
+  ["minPrice", "maxPrice", "minBedrooms", "minBathrooms"].forEach((name) => {
+    const value = formData.get(name);
+    if (value !== null && String(value).trim() !== "") {
+      params.set(name, String(value));
+    }
+  });
+
+  if (document.querySelector("#no-fee").checked) {
+    params.set("noFeeOnly", "true");
+  }
+  if (document.querySelector("#pets-allowed").checked) {
+    params.set("petsAllowed", "true");
+  }
+
+  const amenities = formData.getAll("amenity");
+  if (amenities.length) params.set("amenities", amenities.join(","));
+  params.set("avenueBSide", formData.get("avenueBSide") || "west");
+  return params;
+}
+
+function formatAge(hours) {
+  if (hours < 1) {
+    const minutes = Math.max(1, Math.round(hours * 60));
+    return `Live ${minutes}m ago`;
+  }
+  if (hours < 24) return `Live ${Math.round(hours)}h ago`;
+  const days = Math.floor(hours / 24);
+  const remainingHours = Math.round(hours % 24);
+  return `Live ${days}d ${remainingHours}h ago`;
+}
+
+function bedroomLabel(count) {
+  if (count === 0) return "Studio";
+  return `${count} bed`;
+}
+
+function bathroomLabel(listing) {
+  const count = listing.fullBathroomCount + listing.halfBathroomCount * 0.5;
+  return `${count} bath`;
+}
+
+function pointInPolygon(point, vertices) {
+  let inside = false;
+  for (
+    let current = 0, previous = vertices.length - 1;
+    current < vertices.length;
+    previous = current, current += 1
+  ) {
+    const currentPoint = vertices[current];
+    const previousPoint = vertices[previous];
+    const crossesLatitude =
+      currentPoint.latitude > point.latitude !==
+      previousPoint.latitude > point.latitude;
+    if (!crossesLatitude) continue;
+    const edgeLongitude =
+      ((previousPoint.longitude - currentPoint.longitude) *
+        (point.latitude - currentPoint.latitude)) /
+        (previousPoint.latitude - currentPoint.latitude) +
+      currentPoint.longitude;
+    if (point.longitude < edgeLongitude) inside = !inside;
+  }
+  return inside;
+}
+
+function renderTimeline(listings) {
+  elements.timelineMarkers.replaceChildren();
+  const windowHours = Number(elements.hours.value);
+  elements.timelineLabels.replaceChildren(
+    ...[0, 0.25, 0.5, 0.75, 1].map((fraction) =>
+      makeTextElement(
+        "span",
+        fraction === 0 ? "Now" : `${Math.round(windowHours * fraction)}h`,
+      ),
+    ),
+  );
+
+  listings.forEach((listing, index) => {
+    const marker = document.createElement("button");
+    marker.className = "timeline-marker";
+    marker.type = "button";
+    marker.dataset.listingId = listing.id;
+    marker.classList.toggle(
+      "is-viewed",
+      state.viewedListings.has(String(listing.id)),
+    );
+    marker.style.setProperty(
+      "--position",
+      `${Math.min(100, (listing.ageHours / windowHours) * 100)}%`,
+    );
+    marker.style.setProperty("--lane", `${20 + (index % 4) * 18}px`);
+    marker.setAttribute(
+      "aria-label",
+      `${listing.street} ${listing.unit}, ${formatAge(listing.ageHours)}`,
+    );
+    marker.title =
+      `${listing.street} ${listing.unit} · ${formatAge(listing.ageHours)}`;
+    marker.addEventListener("click", () => {
+      if (state.view === "map") {
+        selectMapListing(listing.id, true);
+        elements.mapView.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+      const card = document.querySelector(`[data-listing-id="${listing.id}"]`);
+      if (!card) return;
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.classList.add("is-highlighted");
+      window.setTimeout(() => card.classList.remove("is-highlighted"), 1500);
+    });
+    elements.timelineMarkers.append(marker);
+  });
+}
+
+function getSortedListings() {
+  let visibleListings = state.listings.filter(
+    (listing) => !state.hiddenListings.has(String(listing.id)),
+  );
+  if (!state.drawingPolygon && state.polygonPoints.length >= 3) {
+    visibleListings = visibleListings.filter((listing) => {
+      const latitude = Number(listing.geoPoint?.latitude);
+      const longitude = Number(listing.geoPoint?.longitude);
+      return (
+        Number.isFinite(latitude) &&
+        Number.isFinite(longitude) &&
+        pointInPolygon({ latitude, longitude }, state.polygonPoints)
+      );
+    });
+  }
+  const listings = state.likedOnly
+    ? visibleListings.filter((listing) =>
+        state.likedListings.has(String(listing.id)),
+      )
+    : visibleListings;
+  if (state.sort === "value") {
+    return listings.sort(
+      (left, right) =>
+        right.valueScore - left.valueScore ||
+        Date.parse(right.listedAt) - Date.parse(left.listedAt),
+    );
+  }
+  if (state.sort === "price-asc") {
+    return listings.sort((left, right) => left.price - right.price);
+  }
+  return listings.sort(
+    (left, right) => Date.parse(right.listedAt) - Date.parse(left.listedAt),
+  );
+}
+
+function makeTextElement(tagName, text) {
+  const element = document.createElement(tagName);
+  element.textContent = text;
+  return element;
+}
+
+function updateViewedControls() {
+  const count = state.viewedListings.size;
+  elements.clearViewed.disabled = count === 0;
+  elements.clearViewed.textContent =
+    count === 0 ? "Clear viewed" : `Clear viewed (${count})`;
+}
+
+function updateLikedControls() {
+  const count = state.likedListings.size;
+  elements.likedOnly.disabled = count === 0 && !state.likedOnly;
+  elements.likedOnly.textContent = `Liked (${count})`;
+  elements.likedOnly.setAttribute("aria-pressed", String(state.likedOnly));
+  elements.likedOnly.classList.toggle("is-active", state.likedOnly);
+}
+
+function updateHiddenControls() {
+  const count = state.hiddenListings.size;
+  elements.restoreHidden.disabled = count === 0;
+  elements.restoreHidden.textContent =
+    count === 0 ? "Restore hidden" : `Restore hidden (${count})`;
+}
+
+function polygonIsActive() {
+  return !state.drawingPolygon && state.polygonPoints.length >= 3;
+}
+
+function updatePolygonControls(visibleCount = getSortedListings().length) {
+  const active = polygonIsActive();
+  const pointCount = state.polygonPoints.length;
+  elements.drawPolygon.setAttribute(
+    "aria-pressed",
+    String(state.drawingPolygon),
+  );
+  elements.drawPolygon.textContent = state.drawingPolygon
+    ? "Placing points…"
+    : active
+      ? "Redraw polygon"
+      : "Draw polygon";
+  elements.drawPolygon.disabled = state.drawingPolygon;
+  elements.undoPolygon.disabled = !state.drawingPolygon || pointCount === 0;
+  elements.finishPolygon.disabled =
+    !state.drawingPolygon || pointCount < 3;
+  elements.clearPolygon.disabled = pointCount === 0;
+  elements.polygonStatus.hidden = !active;
+  elements.polygonStatus.textContent = active
+    ? `Polygon · ${visibleCount} result${visibleCount === 1 ? "" : "s"}`
+    : "";
+  elements.polygonInstruction.textContent = state.drawingPolygon
+    ? `${pointCount} point${pointCount === 1 ? "" : "s"} placed. Add at least three, then finish.`
+    : "Click Draw, then place at least three points.";
+  elements.mapView.classList.toggle("is-drawing", state.drawingPolygon);
+}
+
+function updatePolygonShape() {
+  if (!state.map) return;
+  if (state.polygonShape) {
+    state.polygonShape.remove();
+    state.polygonShape = null;
+  }
+  if (state.polygonVertices) {
+    state.polygonVertices.remove();
+    state.polygonVertices = null;
+  }
+  if (!state.polygonPoints.length) return;
+
+  const latLngs = state.polygonPoints.map((point) => [
+    point.latitude,
+    point.longitude,
+  ]);
+  const style = {
+    color: "#1749c6",
+    weight: 2,
+    dashArray: state.drawingPolygon ? "6 5" : null,
+    fillColor: "#1749c6",
+    fillOpacity: state.drawingPolygon ? 0.06 : 0.13,
+    interactive: false,
+  };
+  state.polygonShape =
+    latLngs.length >= 3
+      ? window.L.polygon(latLngs, style).addTo(state.map)
+      : window.L.polyline(latLngs, style).addTo(state.map);
+
+  if (state.drawingPolygon) {
+    state.polygonVertices = window.L.layerGroup(
+      latLngs.map((latLng) =>
+        window.L.circleMarker(latLng, {
+          radius: 5,
+          color: "#ffffff",
+          weight: 2,
+          fillColor: "#1749c6",
+          fillOpacity: 1,
+          interactive: false,
+        }),
+      ),
+    ).addTo(state.map);
+  }
+}
+
+function startPolygonDrawing() {
+  const hadActivePolygon = polygonIsActive();
+  state.drawingPolygon = true;
+  state.polygonPoints = [];
+  state.mapListingSignature = "";
+  updatePolygonShape();
+  updatePolygonControls();
+  if (hadActivePolygon) renderListings();
+}
+
+function undoPolygonPoint() {
+  if (!state.drawingPolygon || !state.polygonPoints.length) return;
+  state.polygonPoints.pop();
+  updatePolygonShape();
+  updatePolygonControls();
+}
+
+function finishPolygonDrawing() {
+  if (!state.drawingPolygon || state.polygonPoints.length < 3) return;
+  state.drawingPolygon = false;
+  state.mapListingSignature = "";
+  updatePolygonShape();
+  renderListings();
+}
+
+function clearPolygon(render = true) {
+  state.drawingPolygon = false;
+  state.polygonPoints = [];
+  state.mapListingSignature = "";
+  updatePolygonShape();
+  updatePolygonControls();
+  if (render) renderListings();
+}
+
+function applyViewedState(card, listingId) {
+  const viewed = state.viewedListings.has(String(listingId));
+  card.classList.toggle("is-viewed", viewed);
+  card.querySelector(".viewed-badge").hidden = !viewed;
+}
+
+function applyLikedState(card, listingId) {
+  const liked = state.likedListings.has(String(listingId));
+  const button = card.querySelector(".like-button");
+  card.classList.toggle("is-liked", liked);
+  button.setAttribute("aria-pressed", String(liked));
+  button.setAttribute("aria-label", liked ? "Unlike listing" : "Like listing");
+  button.querySelector("span").textContent = liked ? "♥" : "♡";
+}
+
+function markListingViewed(listingId, card) {
+  const id = String(listingId);
+  state.viewedListings.add(id);
+  saveStoredIds(VIEWED_STORAGE_KEY, state.viewedListings);
+  applyViewedState(card, id);
+  document
+    .querySelector(`.timeline-marker[data-listing-id="${id}"]`)
+    ?.classList.add("is-viewed");
+  refreshMapMarker(id);
+  updateViewedControls();
+}
+
+function clearViewedListings() {
+  state.viewedListings.clear();
+  saveStoredIds(VIEWED_STORAGE_KEY, state.viewedListings);
+  renderListings();
+}
+
+function toggleListingLiked(listingId, card) {
+  const id = String(listingId);
+  const wasLiked = state.likedListings.has(id);
+  if (wasLiked) {
+    state.likedListings.delete(id);
+  } else {
+    state.likedListings.add(id);
+  }
+  saveStoredIds(LIKED_STORAGE_KEY, state.likedListings);
+
+  if (state.likedOnly && wasLiked) {
+    renderListings();
+    return;
+  }
+  applyLikedState(card, id);
+  refreshMapMarker(id);
+  updateLikedControls();
+}
+
+function toggleLikedOnly() {
+  if (state.likedListings.size === 0 && !state.likedOnly) return;
+  state.likedOnly = !state.likedOnly;
+  renderListings();
+}
+
+function hideListing(listingId) {
+  const id = String(listingId);
+  state.hiddenListings.add(id);
+  state.likedListings.delete(id);
+  saveStoredIds(HIDDEN_STORAGE_KEY, state.hiddenListings);
+  saveStoredIds(LIKED_STORAGE_KEY, state.likedListings);
+  renderListings();
+}
+
+function restoreHiddenListings() {
+  state.hiddenListings.clear();
+  saveStoredIds(HIDDEN_STORAGE_KEY, state.hiddenListings);
+  renderListings();
+}
+
+function createListingCard(listing, index) {
+  const card = elements.listingTemplate.content
+    .cloneNode(true)
+    .querySelector(".listing-card");
+  card.dataset.listingId = listing.id;
+  applyViewedState(card, listing.id);
+  applyLikedState(card, listing.id);
+  card.querySelector(".listing-index").textContent = String(index + 1).padStart(
+    2,
+    "0",
+  );
+
+  const photo = card.querySelector(".listing-photo");
+  if (listing.imageUrl) {
+    photo.src = listing.imageUrl;
+    photo.alt = `Interior of ${listing.street} ${listing.unit}`;
+  } else {
+    card.querySelector(".listing-visual").classList.add("has-no-photo");
+    photo.remove();
+  }
+  card.querySelector(".listed-age").textContent = formatAge(listing.ageHours);
+  card.querySelector(".listing-address").textContent =
+    `${listing.street} ${listing.unit}`.trim();
+  card.querySelector(".listing-area").textContent = listing.areaName;
+  card.querySelector(".listing-price").textContent =
+    `${currency.format(listing.price)}/mo`;
+
+  const netPrice = card.querySelector(".net-price");
+  if (listing.netEffectivePrice && listing.netEffectivePrice !== listing.price) {
+    netPrice.textContent =
+      `${currency.format(listing.netEffectivePrice)} net effective`;
+  }
+
+  const facts = [
+    bedroomLabel(listing.bedroomCount),
+    bathroomLabel(listing),
+    listing.livingAreaSize
+      ? `${listing.livingAreaSize.toLocaleString()} ft²`
+      : null,
+    listing.availableAt
+      ? `Available ${new Date(
+          `${listing.availableAt}T12:00:00`,
+        ).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+      : "Available now",
+  ].filter(Boolean);
+  const factsContainer = card.querySelector(".listing-facts");
+  facts.forEach((fact) => factsContainer.append(makeTextElement("span", fact)));
+
+  const flags = [
+    listing.noFee ? "No fee" : null,
+    listing.monthsFree ? `${listing.monthsFree} mo. free` : null,
+    listing.hasTour3d ? "3D tour" : null,
+    listing.hasVideos ? "Video" : null,
+    listing.isNewDevelopment ? "New development" : null,
+  ].filter(Boolean);
+  const flagsContainer = card.querySelector(".listing-flags");
+  flags.forEach((flag) => flagsContainer.append(makeTextElement("span", flag)));
+
+  const valueBadge = card.querySelector(".value-badge");
+  if (listing.percentBelowMedian >= 5) {
+    valueBadge.hidden = false;
+    valueBadge.textContent =
+      `${listing.percentBelowMedian}% below local median`;
+  }
+
+  const link = card.querySelector(".listing-link");
+  link.href = listing.streetEasyUrl;
+  link.setAttribute(
+    "aria-label",
+    `Open ${listing.street} ${listing.unit} on StreetEasy`,
+  );
+  link.addEventListener("click", () => markListingViewed(listing.id, card));
+  card
+    .querySelector(".like-button")
+    .addEventListener("click", () => toggleListingLiked(listing.id, card));
+  card
+    .querySelector(".hide-button")
+    .addEventListener("click", () => hideListing(listing.id));
+  return card;
+}
+
+function formatMapPrice(price) {
+  if (price < 1000) return currency.format(price);
+  const thousands = price / 1000;
+  return `$${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}k`;
+}
+
+function createMapMarkerIcon(listing, selected = false) {
+  const classes = ["map-price-marker"];
+  if (state.viewedListings.has(String(listing.id))) classes.push("is-viewed");
+  if (state.likedListings.has(String(listing.id))) classes.push("is-liked");
+  if (selected) classes.push("is-selected");
+
+  return window.L.divIcon({
+    className: "listing-map-marker-wrapper",
+    html: `<span class="${classes.join(" ")}">${formatMapPrice(listing.price)}</span>`,
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+  });
+}
+
+function initializeMap() {
+  if (state.map) return true;
+  if (!window.L) {
+    showNotice(
+      "The map library could not load. Check the network connection and try Map again.",
+    );
+    return false;
+  }
+
+  state.map = window.L.map(elements.listingMap, {
+    zoomControl: true,
+    scrollWheelZoom: true,
+  }).setView([40.7244, -73.987], 14);
+  window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(state.map);
+  state.mapLayer = window.L.layerGroup().addTo(state.map);
+  state.map.on("click", (event) => {
+    if (!state.drawingPolygon) return;
+    state.polygonPoints.push({
+      latitude: event.latlng.lat,
+      longitude: event.latlng.lng,
+    });
+    updatePolygonShape();
+    updatePolygonControls();
+  });
+  return true;
+}
+
+function refreshMapMarker(listingId) {
+  if (!state.map) return;
+  const id = String(listingId);
+  const marker = state.mapMarkers.get(id);
+  const listing = state.listings.find((item) => String(item.id) === id);
+  if (!marker || !listing) return;
+  marker.setIcon(
+    createMapMarkerIcon(listing, state.selectedMapListingId === id),
+  );
+}
+
+function selectMapListing(listingId, panToMarker = false) {
+  const id = String(listingId);
+  const listings = getSortedListings();
+  const listing = listings.find((item) => String(item.id) === id);
+  if (!listing) return;
+
+  const previousId = state.selectedMapListingId;
+  state.selectedMapListingId = id;
+  refreshMapMarker(previousId);
+  refreshMapMarker(id);
+
+  const index = listings.findIndex((item) => String(item.id) === id);
+  elements.mapSelection.replaceChildren(createListingCard(listing, index));
+  if (panToMarker && state.mapMarkers.has(id)) {
+    state.map.panTo(
+      [listing.geoPoint.latitude, listing.geoPoint.longitude],
+      { animate: true },
+    );
+  }
+}
+
+function renderMap(listings) {
+  if (!initializeMap()) return;
+  updatePolygonShape();
+  state.mapLayer.clearLayers();
+  state.mapMarkers.clear();
+
+  const points = [];
+  listings.forEach((listing) => {
+    const latitude = Number(listing.geoPoint?.latitude);
+    const longitude = Number(listing.geoPoint?.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+
+    points.push([latitude, longitude]);
+    const id = String(listing.id);
+    const marker = window.L.marker([latitude, longitude], {
+      icon: createMapMarkerIcon(listing, state.selectedMapListingId === id),
+      keyboard: true,
+      riseOnHover: true,
+      title: `${listing.street} ${listing.unit}, ${currency.format(listing.price)}`,
+    }).addTo(state.mapLayer);
+    marker.on("click", () => selectMapListing(id));
+    state.mapMarkers.set(id, marker);
+  });
+
+  const selectedIsVisible = listings.some(
+    (listing) => String(listing.id) === state.selectedMapListingId,
+  );
+  if (!selectedIsVisible) {
+    state.selectedMapListingId = listings[0]
+      ? String(listings[0].id)
+      : null;
+  }
+
+  if (state.selectedMapListingId) {
+    selectMapListing(state.selectedMapListingId);
+  } else {
+    elements.mapSelection.replaceChildren();
+  }
+
+  const polygonSignature = state.polygonPoints
+    .map((point) => `${point.latitude},${point.longitude}`)
+    .join(";");
+  const signature = `${polygonIsActive() ? polygonSignature : "none"}|${points
+    .map((point) => point.join(","))
+    .join("|")}`;
+  const shouldFitBounds = signature !== state.mapListingSignature;
+  state.mapListingSignature = signature;
+  window.requestAnimationFrame(() => {
+    state.map.invalidateSize();
+    if (!shouldFitBounds) return;
+    if (polygonIsActive() && state.polygonShape) {
+      state.map.fitBounds(state.polygonShape.getBounds(), {
+        paddingTopLeft: [32, 72],
+        paddingBottomRight: [32, 210],
+        maxZoom: 16,
+      });
+    } else if (points.length === 1) {
+      state.map.setView(points[0], 15);
+    } else if (points.length > 1) {
+      state.map.fitBounds(points, {
+        paddingTopLeft: [32, 32],
+        paddingBottomRight: [32, 210],
+        maxZoom: 15,
+      });
+    }
+  });
+}
+
+function setResultsView(view) {
+  if (view === "map" && !window.L) {
+    showNotice(
+      "The map library could not load. Check the network connection and try again.",
+    );
+    return;
+  }
+  if (view === "list" && state.drawingPolygon) clearPolygon(false);
+  state.view = view;
+  elements.listViewButton.classList.toggle("is-active", view === "list");
+  elements.mapViewButton.classList.toggle("is-active", view === "map");
+  elements.listViewButton.setAttribute("aria-pressed", String(view === "list"));
+  elements.mapViewButton.setAttribute("aria-pressed", String(view === "map"));
+  updatePolygonControls();
+  renderListings();
+}
+
+function createEmptyState(hiddenMatchCount) {
+  const empty = document.createElement("div");
+  empty.className = "empty-state";
+  const mark = makeTextElement("span", "0");
+  mark.className = "empty-mark";
+  mark.setAttribute("aria-hidden", "true");
+  empty.append(
+    mark,
+    makeTextElement(
+      "h3",
+      state.likedOnly
+        ? "No liked matches"
+        : polygonIsActive()
+          ? "No matches in this polygon"
+        : hiddenMatchCount > 0
+          ? "Everything is hidden"
+          : "No fresh matches",
+    ),
+    makeTextElement(
+      "p",
+      state.likedOnly
+        ? "No liked apartments are present in this search. Turn off Liked to see every match."
+        : polygonIsActive()
+          ? "Redraw the polygon over another part of the map."
+        : hiddenMatchCount > 0
+          ? "No visible apartments remain in this search. Restore hidden listings to review them again."
+          : "Widen the rent range, remove a must-have, or extend the freshness window.",
+    ),
+  );
+  return empty;
+}
+
+function renderListings() {
+  const listings = getSortedListings();
+  const hiddenMatchCount = state.listings.filter((listing) =>
+    state.hiddenListings.has(String(listing.id)),
+  ).length;
+  elements.listingGrid.replaceChildren();
+  elements.resultCount.textContent = String(listings.length);
+  elements.resultLabel.textContent =
+    listings.length === 1
+      ? state.likedOnly
+        ? "liked rental"
+        : "matching rental"
+      : state.likedOnly
+        ? "liked rentals"
+        : "matching rentals";
+  renderTimeline(listings);
+  updateViewedControls();
+  updateLikedControls();
+  updateHiddenControls();
+  updatePolygonControls(listings.length);
+
+  if (state.view === "map") {
+    elements.listingGrid.hidden = true;
+    elements.mapView.hidden = false;
+    renderMap(listings);
+    if (!listings.length) {
+      const message = createEmptyState(hiddenMatchCount);
+      message.classList.add("map-empty-message");
+      elements.mapSelection.replaceChildren(message);
+    }
+    return;
+  }
+
+  elements.mapView.hidden = true;
+  elements.listingGrid.hidden = false;
+  if (!listings.length) {
+    elements.listingGrid.append(createEmptyState(hiddenMatchCount));
+    return;
+  }
+
+  listings.forEach((listing, index) => {
+    elements.listingGrid.append(createListingCard(listing, index));
+  });
+}
+
+async function scanListings() {
+  if (state.loading) return;
+  setLoading(true);
+  showNotice();
+
+  try {
+    const response = await fetch(`/api/listings?${buildSearchParams()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Listing scan failed.");
+
+    state.listings = payload.listings;
+    renderListings();
+    elements.sync.classList.remove("is-loading");
+    elements.sync.classList.add("is-live");
+    const syncedAt = new Date(payload.generatedAt).toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    elements.syncLabel.textContent = payload.cached
+      ? `Cached scan · ${syncedAt}`
+      : `Scanned · ${syncedAt}`;
+
+    if (payload.truncated) {
+      showNotice(
+        "The search hit its safety limit before reaching the end of the selected time window. Narrow the criteria to guarantee a complete result set.",
+      );
+    }
+  } catch (error) {
+    state.listings = [];
+    renderListings();
+    elements.sync.classList.remove("is-loading", "is-live");
+    elements.syncLabel.textContent = "Scan unavailable";
+    showNotice(
+      error instanceof Error
+        ? error.message
+        : "The listing scan could not be completed.",
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+
+function resetFilters() {
+  state.selectedAreas = new Set(AREAS.map((area) => area.id));
+  elements.filterForm.reset();
+  document.querySelector("#min-price").value = "3000";
+  document.querySelector("#max-price").value = "4500";
+  elements.hours.value = "24";
+  updateHours();
+  renderAreas();
+  showNotice();
+  clearPolygon();
+}
+
+function updateHours() {
+  const hours = elements.hours.value;
+  elements.hoursOutput.textContent =
+    `${hours} ${hours === "1" ? "hour" : "hours"}`;
+  elements.heroHours.textContent = hours;
+  updateMobileFilterSummary();
+}
+
+elements.addAreaButton.addEventListener("click", addSelectedArea);
+elements.addArea.addEventListener("change", addSelectedArea);
+elements.clearPolygon.addEventListener("click", () => clearPolygon());
+elements.clearViewed.addEventListener("click", clearViewedListings);
+elements.drawPolygon.addEventListener("click", startPolygonDrawing);
+elements.finishPolygon.addEventListener("click", finishPolygonDrawing);
+elements.likedOnly.addEventListener("click", toggleLikedOnly);
+elements.listViewButton.addEventListener("click", () => setResultsView("list"));
+elements.mapViewButton.addEventListener("click", () => setResultsView("map"));
+elements.polygonStatus.addEventListener("click", () => clearPolygon());
+elements.restoreHidden.addEventListener("click", restoreHiddenListings);
+elements.undoPolygon.addEventListener("click", undoPolygonPoint);
+elements.filterForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (mobileViewport.matches) {
+    setMobileFiltersOpen(false);
+    document
+      .querySelector(".results")
+      .scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  scanListings();
+});
+elements.filterForm.addEventListener("input", updateMobileFilterSummary);
+elements.filterForm.addEventListener("change", updateMobileFilterSummary);
+elements.hours.addEventListener("input", updateHours);
+elements.mobileFilterToggle.addEventListener("click", () => {
+  setMobileFiltersOpen(
+    elements.mobileFilterToggle.getAttribute("aria-expanded") !== "true",
+  );
+});
+elements.resetFilters.addEventListener("click", resetFilters);
+elements.sortOrder.addEventListener("change", () => {
+  state.sort = elements.sortOrder.value;
+  renderListings();
+});
+
+renderAreas();
+updateHours();
+updateViewedControls();
+updateLikedControls();
+updateHiddenControls();
+updatePolygonControls();
+scanListings();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch(() => {
+      // The dashboard remains fully usable when installation is unavailable.
+    });
+  });
+}

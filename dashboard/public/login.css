@@ -1,0 +1,232 @@
+:root {
+  --ink: #111a28;
+  --muted: #5d6a7a;
+  --paper: #f5f7fa;
+  --surface: #ffffff;
+  --cobalt: #1749c6;
+  --cobalt-deep: #0e3190;
+  --signal: #ff5a35;
+  --line: #cbd4df;
+  --display: "Archivo", "Arial Narrow", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100svh;
+  margin: 0;
+  padding: max(20px, env(safe-area-inset-top))
+    max(20px, env(safe-area-inset-right))
+    max(20px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left));
+  display: grid;
+  place-items: center;
+  overflow-x: hidden;
+  background:
+    linear-gradient(90deg, transparent 49.9%, rgba(255, 255, 255, 0.12) 50%),
+    var(--cobalt);
+  color: var(--ink);
+  font-family: var(--display);
+}
+
+body::before {
+  content: "";
+  width: min(680px, 92vw);
+  height: min(680px, 92vw);
+  position: fixed;
+  right: -32vw;
+  bottom: -46vw;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 46px rgba(255, 255, 255, 0.04),
+    0 0 0 92px rgba(255, 255, 255, 0.025);
+  pointer-events: none;
+}
+
+button,
+input {
+  color: inherit;
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid var(--signal);
+  outline-offset: 3px;
+}
+
+.login-shell {
+  width: min(100%, 470px);
+  position: relative;
+  z-index: 1;
+}
+
+.login-brand {
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: white;
+}
+
+.login-mark {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 50% 50% 50% 9px;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.login-brand strong,
+.login-brand small {
+  display: block;
+}
+
+.login-brand strong {
+  font-size: 18px;
+  font-variation-settings: "wdth" 92;
+}
+
+.login-brand small {
+  color: #caddff;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.login-panel {
+  padding: clamp(28px, 7vw, 44px);
+  background: var(--surface);
+  box-shadow: 12px 12px 0 var(--signal);
+}
+
+.live-signal {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--cobalt);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.live-signal span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--signal);
+  box-shadow: 0 0 0 5px rgba(255, 90, 53, 0.12);
+}
+
+h1 {
+  margin: 25px 0 0;
+  font-size: clamp(42px, 12vw, 64px);
+  font-weight: 800;
+  font-variation-settings: "wdth" 82;
+  letter-spacing: -0.065em;
+  line-height: 0.9;
+}
+
+.login-intro {
+  margin: 22px 0 30px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 13px;
+  border: 1px solid #96a4b4;
+  border-radius: 0;
+  background: white;
+  font-size: 18px;
+}
+
+button {
+  width: 100%;
+  min-height: 54px;
+  margin-top: 12px;
+  padding: 0 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  background: var(--cobalt);
+  color: white;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:hover {
+  background: var(--cobalt-deep);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.login-error {
+  margin: 13px 0 0;
+  color: #a22e18;
+  font-size: 13px;
+}
+
+.device-note {
+  margin: 22px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+@media (max-width: 480px) {
+  body {
+    place-items: start center;
+  }
+
+  .login-shell {
+    margin-top: 5vh;
+  }
+
+  .login-panel {
+    box-shadow: 8px 8px 0 var(--signal);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: first-look-rentals
+    runtime: node
+    plan: free
+    buildCommand: node --check dashboard/server.js
+    startCommand: node dashboard/server.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: ACCESS_PASSWORD
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
