@@ -424,6 +424,49 @@
       </div>
     </main>
 
+    <dialog
+      class="listing-viewer"
+      id="listing-viewer"
+      aria-labelledby="listing-viewer-title"
+    >
+      <div class="listing-viewer-shell">
+        <header class="listing-viewer-header">
+          <div class="listing-viewer-heading">
+            <span class="viewer-mark" aria-hidden="true">FL</span>
+            <div>
+              <p>StreetEasy listing</p>
+              <h2 id="listing-viewer-title">Listing details</h2>
+            </div>
+          </div>
+          <div class="listing-viewer-actions">
+            <a
+              id="listing-viewer-external"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open separately
+              <span aria-hidden="true">↗</span>
+            </a>
+            <button
+              class="listing-viewer-close"
+              id="listing-viewer-close"
+              type="button"
+              aria-label="Close listing"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+        </header>
+        <div class="listing-viewer-frame-wrap">
+          <iframe
+            id="listing-viewer-frame"
+            title="StreetEasy listing details"
+            allow="fullscreen"
+          ></iframe>
+        </div>
+      </div>
+    </dialog>
+
     <template id="listing-template">
       <article class="listing-card">
         <div class="listing-visual">
@@ -456,7 +499,7 @@
           <strong class="listing-price"></strong>
           <span class="net-price"></span>
           <a class="listing-link" target="_blank" rel="noopener noreferrer">
-            Open listing
+            View listing
             <span aria-hidden="true">↗</span>
           </a>
         </div>

@@ -69,6 +69,11 @@ const elements = {
   hoursOutput: document.querySelector("#hours-output"),
   listingGrid: document.querySelector("#listing-grid"),
   listingTemplate: document.querySelector("#listing-template"),
+  listingViewer: document.querySelector("#listing-viewer"),
+  listingViewerClose: document.querySelector("#listing-viewer-close"),
+  listingViewerExternal: document.querySelector("#listing-viewer-external"),
+  listingViewerFrame: document.querySelector("#listing-viewer-frame"),
+  listingViewerTitle: document.querySelector("#listing-viewer-title"),
   likedOnly: document.querySelector("#liked-only"),
   listViewButton: document.querySelector("#list-view-button"),
   listingMap: document.querySelector("#listing-map"),
@@ -551,6 +556,22 @@ function restoreHiddenListings() {
   renderListings();
 }
 
+function closeListingViewer() {
+  if (elements.listingViewer.open) elements.listingViewer.close();
+  elements.listingViewerFrame.src = "about:blank";
+  document.body.classList.remove("viewer-open");
+}
+
+function openListingViewer(listing, card) {
+  markListingViewed(listing.id, card);
+  const address = `${listing.street} ${listing.unit}`.trim();
+  elements.listingViewerTitle.textContent = address;
+  elements.listingViewerFrame.src = listing.streetEasyUrl;
+  elements.listingViewerExternal.href = listing.streetEasyUrl;
+  document.body.classList.add("viewer-open");
+  elements.listingViewer.showModal();
+}
+
 function createListingCard(listing, index) {
   const card = elements.listingTemplate.content
     .cloneNode(true)
@@ -620,9 +641,12 @@ function createListingCard(listing, index) {
   link.href = listing.streetEasyUrl;
   link.setAttribute(
     "aria-label",
-    `Open ${listing.street} ${listing.unit} on StreetEasy`,
+    `View ${listing.street} ${listing.unit} on StreetEasy`,
   );
-  link.addEventListener("click", () => markListingViewed(listing.id, card));
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    openListingViewer(listing, card);
+  });
   card
     .querySelector(".like-button")
     .addEventListener("click", () => toggleListingLiked(listing.id, card));
@@ -968,6 +992,14 @@ elements.mobileFilterToggle.addEventListener("click", () => {
   setMobileFiltersOpen(
     elements.mobileFilterToggle.getAttribute("aria-expanded") !== "true",
   );
+});
+elements.listingViewerClose.addEventListener("click", closeListingViewer);
+elements.listingViewer.addEventListener("click", (event) => {
+  if (event.target === elements.listingViewer) closeListingViewer();
+});
+elements.listingViewer.addEventListener("close", () => {
+  elements.listingViewerFrame.src = "about:blank";
+  document.body.classList.remove("viewer-open");
 });
 elements.resetFilters.addEventListener("click", resetFilters);
 elements.sortOrder.addEventListener("change", () => {
