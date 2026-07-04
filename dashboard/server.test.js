@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   buildFilterLiteral,
+  buildFullDetailsQuery,
   avenueBLongitudeAt,
   latestActiveAt,
   parseSearchParams,
@@ -34,6 +35,17 @@ test("builds typed GraphQL filters without quoting enum values", () => {
   assert.match(literal, /price: \{ lowerBound: 3000, upperBound: 4500 \}/);
   assert.match(literal, /rentalStatus: ACTIVE/);
   assert.match(literal, /amenities: \[WASHER_DRYER, ELEVATOR\]/);
+});
+
+test("builds the native rental detail query", () => {
+  const query = buildFullDetailsQuery("5091098");
+
+  assert.match(query, /rentalByListingId\(id: "5091098"\)/);
+  assert.match(query, /description/);
+  assert.match(query, /media \{/);
+  assert.match(query, /propertyDetails \{/);
+  assert.match(query, /buildingByRentalListingId/);
+  assert.match(query, /transitStations/);
 });
 
 test("uses the latest ACTIVE transition as the public listing time", () => {

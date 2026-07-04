@@ -50,6 +50,9 @@ const state = {
   polygonPoints: [],
   polygonShape: null,
   polygonVertices: null,
+  detailPhotos: [],
+  detailPhotoIndex: 0,
+  detailRequest: null,
   viewedListings: loadStoredIds(VIEWED_STORAGE_KEY),
   likedListings: loadStoredIds(LIKED_STORAGE_KEY),
   hiddenListings: loadStoredIds(HIDDEN_STORAGE_KEY),
@@ -62,17 +65,40 @@ const elements = {
   clearPolygon: document.querySelector("#clear-polygon"),
   clearViewed: document.querySelector("#clear-viewed"),
   drawPolygon: document.querySelector("#draw-polygon"),
+  detailAddress: document.querySelector("#detail-address"),
+  detailAmenities: document.querySelector("#detail-amenities"),
+  detailArea: document.querySelector("#detail-area"),
+  detailBuildingName: document.querySelector("#detail-building-name"),
+  detailBuildingStats: document.querySelector("#detail-building-stats"),
+  detailCity: document.querySelector("#detail-city"),
+  detailDescription: document.querySelector("#detail-description"),
+  detailFacts: document.querySelector("#detail-facts"),
+  detailFlags: document.querySelector("#detail-flags"),
+  detailOpenHouses: document.querySelector("#detail-open-houses"),
+  detailPhoto: document.querySelector("#detail-photo"),
+  detailPhotoCount: document.querySelector("#detail-photo-count"),
+  detailPhotoNext: document.querySelector("#detail-photo-next"),
+  detailPhotoPrevious: document.querySelector("#detail-photo-previous"),
+  detailPrice: document.querySelector("#detail-price"),
+  detailThumbnails: document.querySelector("#detail-thumbnails"),
+  detailTransit: document.querySelector("#detail-transit"),
   finishPolygon: document.querySelector("#finish-polygon"),
   filterForm: document.querySelector("#filter-form"),
   heroHours: document.querySelector("#hero-hours"),
   hours: document.querySelector("#hours"),
   hoursOutput: document.querySelector("#hours-output"),
   listingGrid: document.querySelector("#listing-grid"),
+  listingDetail: document.querySelector("#listing-detail"),
+  listingDetailError: document.querySelector("#listing-detail-error"),
+  listingDetailErrorMessage: document.querySelector(
+    "#listing-detail-error-message",
+  ),
+  listingDetailLoading: document.querySelector("#listing-detail-loading"),
+  listingDetailScroll: document.querySelector("#listing-detail-scroll"),
   listingTemplate: document.querySelector("#listing-template"),
   listingViewer: document.querySelector("#listing-viewer"),
   listingViewerClose: document.querySelector("#listing-viewer-close"),
   listingViewerExternal: document.querySelector("#listing-viewer-external"),
-  listingViewerFrame: document.querySelector("#listing-viewer-frame"),
   listingViewerTitle: document.querySelector("#listing-viewer-title"),
   likedOnly: document.querySelector("#liked-only"),
   listViewButton: document.querySelector("#list-view-button"),
@@ -557,19 +583,361 @@ function restoreHiddenListings() {
 }
 
 function closeListingViewer() {
+  state.detailRequest?.abort();
+  state.detailRequest = null;
   if (elements.listingViewer.open) elements.listingViewer.close();
-  elements.listingViewerFrame.src = "about:blank";
   document.body.classList.remove("viewer-open");
 }
 
-function openListingViewer(listing, card) {
+function humanizeDetailLabel(value) {
+  return String(value)
+    .toLowerCase()
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function makeDetailChip(text, className = "") {
+  const chip = makeTextElement("span", text);
+  if (className) chip.className = className;
+  return chip;
+}
+
+function renderDetailChips(container, values, emptyMessage) {
+  container.replaceChildren();
+  const uniqueValues = [...new Set(values.filter(Boolean))];
+  if (!uniqueValues.length) {
+    const empty = makeTextElement("p", emptyMessage);
+    empty.className = "detail-muted";
+    container.append(empty);
+    return;
+  }
+  uniqueValues.forEach((value) =>
+    container.append(makeDetailChip(humanizeDetailLabel(value))),
+  );
+}
+
+function updateDetailPhoto() {
+  const total = state.detailPhotos.length;
+  if (!total) {
+    elements.detailPhoto.removeAttribute("src");
+    elements.detailPhoto.alt = "";
+    elements.detailPhotoCount.textContent = "No photos";
+    elements.detailPhotoPrevious.disabled = true;
+    elements.detailPhotoNext.disabled = true;
+    return;
+  }
+
+  const photo = state.detailPhotos[state.detailPhotoIndex];
+  elements.detailPhoto.src = photo.url;
+  elements.detailPhoto.alt =
+    `${elements.listingViewerTitle.textContent}, photo ${
+      state.detailPhotoIndex + 1
+    } of ${total}`;
+  elements.detailPhotoCount.textContent =
+    `${state.detailPhotoIndex + 1} / ${total}${
+      photo.type === "floor-plan" ? " · Floor plan" : ""
+    }`;
+  elements.detailPhotoPrevious.disabled = total < 2;
+  elements.detailPhotoNext.disabled = total < 2;
+  elements.detailThumbnails
+    .querySelectorAll("button")
+    .forEach((button, index) => {
+      button.classList.toggle("is-active", index === state.detailPhotoIndex);
+      button.setAttribute(
+        "aria-current",
+        index === state.detailPhotoIndex ? "true" : "false",
+      );
+    });
+}
+
+function moveDetailPhoto(direction) {
+  if (state.detailPhotos.length < 2) return;
+  state.detailPhotoIndex =
+    (state.detailPhotoIndex + direction + state.detailPhotos.length) %
+    state.detailPhotos.length;
+  updateDetailPhoto();
+}
+
+function renderDetailGallery(details, listing) {
+  state.detailPhotos = [
+    ...(details.media?.photos || []).map((url) => ({ url, type: "photo" })),
+    ...(details.media?.floorPlans || []).map((url) => ({
+      url,
+      type: "floor-plan",
+    })),
+  ];
+  if (!state.detailPhotos.length && listing.imageUrl) {
+    state.detailPhotos.push({ url: listing.imageUrl, type: "photo" });
+  }
+  state.detailPhotoIndex = 0;
+  elements.detailThumbnails.replaceChildren();
+  state.detailPhotos.forEach((photo, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute(
+      "aria-label",
+      photo.type === "floor-plan"
+        ? `View floor plan ${index + 1}`
+        : `View photo ${index + 1}`,
+    );
+    const image = document.createElement("img");
+    image.src = photo.url;
+    image.alt = "";
+    image.loading = "lazy";
+    button.append(image);
+    button.addEventListener("click", () => {
+      state.detailPhotoIndex = index;
+      updateDetailPhoto();
+    });
+    elements.detailThumbnails.append(button);
+  });
+  updateDetailPhoto();
+}
+
+function renderDetailFacts(details) {
+  const property = details.property || {};
+  const bathroomCount =
+    Number(property.fullBathroomCount || 0) +
+    Number(property.halfBathroomCount || 0) * 0.5;
+  const facts = [
+    property.bedroomCount === 0
+      ? "Studio"
+      : property.bedroomCount != null
+        ? `${property.bedroomCount} bed`
+        : null,
+    bathroomCount ? `${bathroomCount} bath` : null,
+    property.roomCount ? `${property.roomCount} rooms` : null,
+    property.livingAreaSize
+      ? `${Number(property.livingAreaSize).toLocaleString()} ft²`
+      : null,
+    details.availableAt
+      ? `Available ${new Date(
+          `${details.availableAt}T12:00:00`,
+        ).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })}`
+      : "Available now",
+  ].filter(Boolean);
+  elements.detailFacts.replaceChildren(
+    ...facts.map((fact) => makeDetailChip(fact)),
+  );
+}
+
+function renderDetailFlags(details) {
+  const pricing = details.pricing || {};
+  const belowMedian =
+    pricing.price && details.neighborhoodMedian
+      ? Math.round(
+          ((details.neighborhoodMedian - pricing.price) /
+            details.neighborhoodMedian) *
+            100,
+        )
+      : null;
+  const flags = [
+    pricing.noFee ? "No fee" : null,
+    pricing.monthsFree ? `${pricing.monthsFree} months free` : null,
+    pricing.leaseTermMonths
+      ? `${pricing.leaseTermMonths}-month lease`
+      : null,
+    belowMedian >= 5 ? `${belowMedian}% below neighborhood median` : null,
+  ].filter(Boolean);
+  elements.detailFlags.replaceChildren(
+    ...flags.map((flag) => makeDetailChip(flag)),
+  );
+  elements.detailFlags.hidden = !flags.length;
+}
+
+function renderBuildingDetails(details) {
+  const building = details.building;
+  if (!building) {
+    elements.detailBuildingName.textContent = "Building details";
+    elements.detailBuildingStats.replaceChildren(
+      makeTextElement("p", "Building information is not published."),
+    );
+    return;
+  }
+
+  elements.detailBuildingName.textContent =
+    building.name || building.address?.street || "Building details";
+  const petPolicy = building.petPolicy;
+  const stats = [
+    building.yearBuilt ? ["Built", building.yearBuilt] : null,
+    building.residentialUnitCount
+      ? ["Homes", building.residentialUnitCount]
+      : null,
+    building.type ? ["Type", humanizeDetailLabel(building.type)] : null,
+    petPolicy?.dogsAllowed || petPolicy?.catsAllowed
+      ? [
+          "Pets",
+          [
+            petPolicy.dogsAllowed ? "Dogs" : null,
+            petPolicy.catsAllowed ? "Cats" : null,
+          ]
+            .filter(Boolean)
+            .join(" + "),
+        ]
+      : null,
+  ].filter(Boolean);
+  elements.detailBuildingStats.replaceChildren();
+  if (!stats.length) {
+    elements.detailBuildingStats.append(
+      makeTextElement("p", "Building information is not published."),
+    );
+    return;
+  }
+  stats.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    row.append(makeTextElement("span", label), makeTextElement("strong", value));
+    elements.detailBuildingStats.append(row);
+  });
+}
+
+function renderTransit(details) {
+  const stations = details.building?.transitStations || [];
+  elements.detailTransit.replaceChildren();
+  if (!stations.length) {
+    const empty = makeTextElement("p", "Nearby subway data is not published.");
+    empty.className = "detail-muted";
+    elements.detailTransit.append(empty);
+    return;
+  }
+
+  stations.slice(0, 5).forEach((station) => {
+    const row = document.createElement("div");
+    const name = document.createElement("div");
+    name.append(
+      makeTextElement("strong", station.name),
+      makeTextElement(
+        "small",
+        `${Number(station.distance).toFixed(2)} mi`,
+      ),
+    );
+    const routes = document.createElement("div");
+    routes.className = "detail-routes";
+    (station.routes || []).forEach((route) =>
+      routes.append(makeDetailChip(route)),
+    );
+    row.append(name, routes);
+    elements.detailTransit.append(row);
+  });
+}
+
+function renderOpenHouses(details) {
+  const openHouses = details.upcomingOpenHouses || [];
+  elements.detailOpenHouses.replaceChildren();
+  if (!openHouses.length) {
+    const empty = makeTextElement("p", "No upcoming open houses are published.");
+    empty.className = "detail-muted";
+    elements.detailOpenHouses.append(empty);
+    return;
+  }
+
+  openHouses.forEach((openHouse) => {
+    const start = new Date(openHouse.startTime);
+    const end = new Date(openHouse.endTime);
+    const row = document.createElement("div");
+    row.append(
+      makeTextElement(
+        "strong",
+        start.toLocaleDateString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        }),
+      ),
+      makeTextElement(
+        "span",
+        `${start.toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+        })}–${end.toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+        })}${openHouse.appointmentOnly ? " · Appointment only" : ""}`,
+      ),
+    );
+    elements.detailOpenHouses.append(row);
+  });
+}
+
+function renderListingDetails(details, listing) {
+  const address = details.property?.address || {};
+  const displayAddress =
+    [address.street, address.unit].filter(Boolean).join(" ") ||
+    `${listing.street} ${listing.unit}`.trim();
+  elements.listingViewerTitle.textContent = displayAddress;
+  elements.detailAddress.textContent = displayAddress;
+  elements.detailArea.textContent =
+    details.building?.areaName || listing.areaName;
+  elements.detailCity.textContent = [
+    address.city ? humanizeDetailLabel(address.city) : null,
+    address.state,
+    address.zipCode,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  elements.detailPrice.textContent =
+    `${currency.format(details.pricing?.price || listing.price)}/mo`;
+  elements.detailDescription.textContent =
+    details.description || "No description was published for this rental.";
+
+  renderDetailGallery(details, listing);
+  renderDetailFacts(details);
+  renderDetailFlags(details);
+  renderDetailChips(
+    elements.detailAmenities,
+    [
+      ...(details.property?.features || []),
+      ...(details.property?.amenities || []),
+      ...(details.building?.policies || []),
+    ],
+    "No additional amenities were published.",
+  );
+  renderBuildingDetails(details);
+  renderTransit(details);
+  renderOpenHouses(details);
+}
+
+async function openListingViewer(listing, card) {
   markListingViewed(listing.id, card);
   const address = `${listing.street} ${listing.unit}`.trim();
   elements.listingViewerTitle.textContent = address;
-  elements.listingViewerFrame.src = listing.streetEasyUrl;
   elements.listingViewerExternal.href = listing.streetEasyUrl;
+  elements.listingDetail.hidden = true;
+  elements.listingDetailError.hidden = true;
+  elements.listingDetailLoading.hidden = false;
+  elements.listingDetailScroll.scrollTop = 0;
   document.body.classList.add("viewer-open");
   elements.listingViewer.showModal();
+
+  state.detailRequest?.abort();
+  const controller = new AbortController();
+  state.detailRequest = controller;
+  try {
+    const response = await fetch(
+      `/api/listings/${encodeURIComponent(listing.id)}`,
+      { signal: controller.signal },
+    );
+    const details = await response.json();
+    if (!response.ok) {
+      throw new Error(details.error || "Listing details could not be loaded.");
+    }
+    renderListingDetails(details, listing);
+    elements.listingDetailLoading.hidden = true;
+    elements.listingDetail.hidden = false;
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    elements.listingDetailLoading.hidden = true;
+    elements.listingDetailError.hidden = false;
+    elements.listingDetailErrorMessage.textContent =
+      error instanceof Error
+        ? error.message
+        : "Listing details could not be loaded.";
+  } finally {
+    if (state.detailRequest === controller) state.detailRequest = null;
+  }
 }
 
 function createListingCard(listing, index) {
@@ -641,7 +1009,7 @@ function createListingCard(listing, index) {
   link.href = listing.streetEasyUrl;
   link.setAttribute(
     "aria-label",
-    `View ${listing.street} ${listing.unit} on StreetEasy`,
+    `View details for ${listing.street} ${listing.unit}`,
   );
   link.addEventListener("click", (event) => {
     event.preventDefault();
@@ -998,9 +1366,14 @@ elements.listingViewer.addEventListener("click", (event) => {
   if (event.target === elements.listingViewer) closeListingViewer();
 });
 elements.listingViewer.addEventListener("close", () => {
-  elements.listingViewerFrame.src = "about:blank";
+  state.detailRequest?.abort();
+  state.detailRequest = null;
   document.body.classList.remove("viewer-open");
 });
+elements.detailPhotoPrevious.addEventListener("click", () =>
+  moveDetailPhoto(-1),
+);
+elements.detailPhotoNext.addEventListener("click", () => moveDetailPhoto(1));
 elements.resetFilters.addEventListener("click", resetFilters);
 elements.sortOrder.addEventListener("change", () => {
   state.sort = elements.sortOrder.value;

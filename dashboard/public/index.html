@@ -434,7 +434,7 @@
           <div class="listing-viewer-heading">
             <span class="viewer-mark" aria-hidden="true">FL</span>
             <div>
-              <p>StreetEasy listing</p>
+              <p>Rental brief</p>
               <h2 id="listing-viewer-title">Listing details</h2>
             </div>
           </div>
@@ -444,7 +444,7 @@
               target="_blank"
               rel="noopener noreferrer"
             >
-              Open separately
+              Source
               <span aria-hidden="true">↗</span>
             </a>
             <button
@@ -457,12 +457,91 @@
             </button>
           </div>
         </header>
-        <div class="listing-viewer-frame-wrap">
-          <iframe
-            id="listing-viewer-frame"
-            title="StreetEasy listing details"
-            allow="fullscreen"
-          ></iframe>
+        <div class="listing-detail-scroll" id="listing-detail-scroll">
+          <div class="listing-detail-loading" id="listing-detail-loading">
+            <span aria-hidden="true"></span>
+            <p>Loading the complete rental brief…</p>
+          </div>
+          <div class="listing-detail-error" id="listing-detail-error" hidden>
+            <strong>Details unavailable</strong>
+            <p id="listing-detail-error-message"></p>
+          </div>
+          <article class="listing-detail" id="listing-detail" hidden>
+            <section class="detail-gallery" aria-label="Listing photos">
+              <div class="detail-photo-stage">
+                <img id="detail-photo" alt="" />
+                <button
+                  class="detail-photo-previous"
+                  id="detail-photo-previous"
+                  type="button"
+                  aria-label="Previous photo"
+                >
+                  ‹
+                </button>
+                <button
+                  class="detail-photo-next"
+                  id="detail-photo-next"
+                  type="button"
+                  aria-label="Next photo"
+                >
+                  ›
+                </button>
+                <span class="detail-photo-count" id="detail-photo-count"></span>
+              </div>
+              <div
+                class="detail-thumbnails"
+                id="detail-thumbnails"
+                aria-label="Choose photo"
+              ></div>
+            </section>
+
+            <section class="detail-overview">
+              <p class="detail-area" id="detail-area"></p>
+              <div class="detail-title-row">
+                <div>
+                  <h3 id="detail-address"></h3>
+                  <p id="detail-city"></p>
+                </div>
+                <strong id="detail-price"></strong>
+              </div>
+              <div class="detail-facts" id="detail-facts"></div>
+              <div class="detail-flags" id="detail-flags"></div>
+            </section>
+
+            <section class="detail-section detail-description-section">
+              <p class="detail-kicker">The apartment</p>
+              <h3>What the listing says</h3>
+              <p class="detail-description" id="detail-description"></p>
+            </section>
+
+            <div class="detail-section-grid">
+              <section class="detail-section">
+                <p class="detail-kicker">Inside</p>
+                <h3>Features & amenities</h3>
+                <div class="detail-chip-list" id="detail-amenities"></div>
+              </section>
+
+              <section class="detail-section">
+                <p class="detail-kicker">The building</p>
+                <h3 id="detail-building-name">Building details</h3>
+                <div class="detail-stat-list" id="detail-building-stats"></div>
+              </section>
+            </div>
+
+            <div class="detail-section-grid">
+              <section class="detail-section">
+                <p class="detail-kicker">Nearby</p>
+                <h3>Subway access</h3>
+                <div class="detail-transit-list" id="detail-transit"></div>
+              </section>
+
+              <section class="detail-section">
+                <p class="detail-kicker">Timing</p>
+                <h3>Open houses</h3>
+                <div class="detail-open-house-list" id="detail-open-houses"></div>
+              </section>
+            </div>
+          </article>
         </div>
       </div>
     </dialog>
@@ -499,7 +578,7 @@
           <strong class="listing-price"></strong>
           <span class="net-price"></span>
           <a class="listing-link" target="_blank" rel="noopener noreferrer">
-            View listing
+            View details
             <span aria-hidden="true">↗</span>
           </a>
         </div>

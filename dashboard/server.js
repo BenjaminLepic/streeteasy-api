@@ -30,6 +30,7 @@ const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_PAGES = 5;
 const CACHE_TTL_MS = 60_000;
 const cache = new Map();
+const detailsCache = new Map();
 
 // Avenue B centerline, south to north, derived from OpenStreetMap road geometry.
 // A small tolerance keeps buildings whose map pin falls just off the centerline
@@ -320,6 +321,186 @@ function buildDetailsQuery(ids) {
   return `query DashboardListingTimes { ${fields.join("\n")} }`;
 }
 
+function buildFullDetailsQuery(id) {
+  return `
+    query DashboardRentalDetails {
+      rentalByListingId(id: ${JSON.stringify(id)}) {
+        id
+        availableAt
+        status
+        description
+        media {
+          photos { key }
+          floorPlans { key }
+          videos { imageUrl id provider }
+          tour3dUrl
+          assetCount
+        }
+        propertyDetails {
+          address {
+            street
+            city
+            state
+            zipCode
+            unit
+          }
+          roomCount
+          bedroomCount
+          fullBathroomCount
+          halfBathroomCount
+          livingAreaSize
+          amenities {
+            list
+            doormanTypes
+            parkingTypes
+            sharedOutdoorSpaceTypes
+            storageSpaceTypes
+          }
+          features {
+            list
+            fireplaceTypes
+            privateOutdoorSpaceTypes
+            views
+          }
+        }
+        pricing {
+          leaseTermMonths
+          monthsFree
+          noFee
+          price
+          priceDelta
+          priceChanges { changedAt }
+        }
+        recentListingsPriceStats {
+          rentalPriceStats { medianPrice }
+        }
+        upcomingOpenHouses {
+          id
+          startTime
+          endTime
+          appointmentOnly
+        }
+        listingSource { sourceType }
+      }
+      buildingByRentalListingId(id: ${JSON.stringify(id)}) {
+        id
+        name
+        type
+        residentialUnitCount
+        yearBuilt
+        status
+        address {
+          street
+          city
+          state
+          zipCode
+        }
+        area { name }
+        policies {
+          list
+          petPolicy {
+            catsAllowed
+            dogsAllowed
+            maxDogWeight
+            restrictedDogBreeds
+          }
+        }
+        nearby {
+          transitStations {
+            name
+            distance
+            routes
+          }
+        }
+      }
+    }
+  `;
+}
+
+function mediaUrl(key) {
+  return key
+    ? `https://photos.zillowstatic.com/fp/${key}-cc_ft_768.webp`
+    : null;
+}
+
+function flattenDetailLabels(details) {
+  return [
+    ...(details?.list || []),
+    ...(details?.doormanTypes || []),
+    ...(details?.parkingTypes || []),
+    ...(details?.sharedOutdoorSpaceTypes || []),
+    ...(details?.storageSpaceTypes || []),
+    ...(details?.fireplaceTypes || []),
+    ...(details?.privateOutdoorSpaceTypes || []),
+    ...(details?.views || []),
+  ].filter(Boolean);
+}
+
+async function findListingDetails(id) {
+  const cached = detailsCache.get(id);
+  if (cached && Date.now() - cached.savedAt < CACHE_TTL_MS) {
+    return { ...cached.value, cached: true };
+  }
+
+  const data = await streetEasyRequest(buildFullDetailsQuery(id));
+  const listing = data.rentalByListingId;
+  if (!listing) throw new Error("Listing details were not found.");
+
+  const property = listing.propertyDetails || {};
+  const building = data.buildingByRentalListingId;
+  const value = {
+    id: String(listing.id),
+    availableAt: listing.availableAt,
+    status: listing.status,
+    description: listing.description || "",
+    media: {
+      photos: (listing.media?.photos || [])
+        .map((photo) => mediaUrl(photo.key))
+        .filter(Boolean),
+      floorPlans: (listing.media?.floorPlans || [])
+        .map((floorPlan) => mediaUrl(floorPlan.key))
+        .filter(Boolean),
+      videos: listing.media?.videos || [],
+      tour3dUrl: listing.media?.tour3dUrl || null,
+    },
+    property: {
+      address: property.address || null,
+      roomCount: property.roomCount ?? null,
+      bedroomCount: property.bedroomCount ?? null,
+      fullBathroomCount: property.fullBathroomCount ?? null,
+      halfBathroomCount: property.halfBathroomCount ?? null,
+      livingAreaSize: property.livingAreaSize ?? null,
+      amenities: flattenDetailLabels(property.amenities),
+      features: flattenDetailLabels(property.features),
+    },
+    pricing: listing.pricing || null,
+    neighborhoodMedian:
+      listing.recentListingsPriceStats?.rentalPriceStats?.medianPrice ?? null,
+    upcomingOpenHouses: listing.upcomingOpenHouses || [],
+    sourceType: listing.listingSource?.sourceType || null,
+    building: building
+      ? {
+          id: String(building.id),
+          name: building.name,
+          type: building.type,
+          residentialUnitCount: building.residentialUnitCount ?? null,
+          yearBuilt: building.yearBuilt ?? null,
+          status: building.status,
+          address: building.address || null,
+          areaName: building.area?.name || null,
+          policies: building.policies?.list || [],
+          petPolicy: building.policies?.petPolicy || null,
+          transitStations: building.nearby?.transitStations || [],
+        }
+      : null,
+    generatedAt: new Date().toISOString(),
+    cached: false,
+  };
+
+  detailsCache.set(id, { savedAt: Date.now(), value });
+  return value;
+}
+
 async function streetEasyRequest(query) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
@@ -463,9 +644,7 @@ function decorateListing(listing, detail, now, hours) {
     valueScore,
     windowHours: hours,
     streetEasyUrl: `https://streeteasy.com${listing.urlPath}`,
-    imageUrl: listing.leadMedia?.photo?.key
-      ? `https://photos.zillowstatic.com/fp/${listing.leadMedia.photo.key}-cc_ft_768.webp`
-      : null,
+    imageUrl: mediaUrl(listing.leadMedia?.photo?.key),
   };
 }
 
@@ -630,7 +809,8 @@ function createServer() {
 
     if (
       ACCESS_PASSWORD &&
-      ["/", "/index.html", "/api/listings"].includes(url.pathname) &&
+      (["/", "/index.html"].includes(url.pathname) ||
+        url.pathname.startsWith("/api/listings")) &&
       !hasValidSession(request)
     ) {
       if (url.pathname.startsWith("/api/")) {
@@ -663,6 +843,28 @@ function createServer() {
       return;
     }
 
+    const listingDetailsMatch = url.pathname.match(
+      /^\/api\/listings\/([A-Za-z0-9_-]{1,80})$/,
+    );
+    if (listingDetailsMatch && request.method === "GET") {
+      try {
+        sendJson(
+          response,
+          200,
+          await findListingDetails(listingDetailsMatch[1]),
+        );
+      } catch (error) {
+        const status = error instanceof UpstreamError ? error.status : 400;
+        sendJson(response, status, {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The listing details could not be loaded.",
+        });
+      }
+      return;
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
       response.writeHead(405, { Allow: "GET, HEAD" });
       response.end("Method not allowed");
@@ -682,6 +884,7 @@ if (require.main === module) {
 module.exports = {
   buildDetailsQuery,
   buildFilterLiteral,
+  buildFullDetailsQuery,
   buildSearchQuery,
   createServer,
   decorateListing,
