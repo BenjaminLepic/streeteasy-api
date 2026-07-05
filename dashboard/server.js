@@ -10,8 +10,14 @@ const {
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD || "";
-const AUTH_SECRET = process.env.AUTH_SECRET || ACCESS_PASSWORD;
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN || "";
+const AUTH_ENABLED = Boolean(ACCESS_PASSWORD || ACCESS_TOKEN);
+const AUTH_SECRET =
+  process.env.AUTH_SECRET || ACCESS_PASSWORD || ACCESS_TOKEN;
 const PUBLIC_DIR = path.join(__dirname, "public");
+const APP_MANIFEST = JSON.parse(
+  fs.readFileSync(path.join(PUBLIC_DIR, "manifest.webmanifest"), "utf8"),
+);
 const STREETEASY_API = "https://api-v6.streeteasy.com/";
 const DEFAULT_AREAS = [
   105, 106, 107, 108, 110, 112, 115, 116, 117, 146, 157, 162,
@@ -75,7 +81,7 @@ function authToken() {
 }
 
 function hasValidSession(request) {
-  if (!ACCESS_PASSWORD) return true;
+  if (!AUTH_ENABLED) return true;
   const cookie = request.headers.cookie || "";
   const session = cookie
     .split(";")
@@ -96,7 +102,7 @@ function sessionCookie(request) {
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
-    "Max-Age=2592000",
+    "Max-Age=31536000",
     secure ? "Secure" : "",
   ]
     .filter(Boolean)
@@ -784,6 +790,45 @@ function createServer() {
   return http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
 
+    const unlockMatch = url.pathname.match(
+      /^\/unlock\/([A-Za-z0-9_-]{20,200})$/,
+    );
+    if (unlockMatch && request.method === "GET") {
+      if (!ACCESS_TOKEN || !safeEqual(unlockMatch[1], ACCESS_TOKEN)) {
+        response.writeHead(404, { "Cache-Control": "no-store" });
+        response.end("Not found");
+        return;
+      }
+
+      response.writeHead(302, {
+        Location: "/",
+        "Set-Cookie": sessionCookie(request),
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+      });
+      response.end();
+      return;
+    }
+
+    if (url.pathname === "/manifest.webmanifest" && request.method === "GET") {
+      sendJson(
+        response,
+        200,
+        {
+          ...APP_MANIFEST,
+          start_url:
+            ACCESS_TOKEN && hasValidSession(request)
+              ? `/unlock/${ACCESS_TOKEN}`
+              : "/",
+        },
+        {
+          "Content-Type": "application/manifest+json; charset=utf-8",
+          "Referrer-Policy": "no-referrer",
+        },
+      );
+      return;
+    }
+
     if (url.pathname === "/api/login" && request.method === "POST") {
       try {
         const body = await readJson(request);
@@ -808,7 +853,7 @@ function createServer() {
     }
 
     if (
-      ACCESS_PASSWORD &&
+      AUTH_ENABLED &&
       (["/", "/index.html"].includes(url.pathname) ||
         url.pathname.startsWith("/api/listings")) &&
       !hasValidSession(request)

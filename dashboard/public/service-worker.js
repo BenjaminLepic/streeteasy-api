@@ -1,10 +1,9 @@
-const CACHE_NAME = "first-look-shell-v2";
+const CACHE_NAME = "first-look-shell-v3";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/styles.css?v=20260704",
   "/app.js?v=20260704",
-  "/manifest.webmanifest",
   "/icon-192.png",
   "/icon-512.png",
   "/icon.svg",
@@ -33,7 +32,8 @@ self.addEventListener("fetch", (event) => {
   if (
     event.request.method !== "GET" ||
     requestUrl.origin !== self.location.origin ||
-    requestUrl.pathname.startsWith("/api/")
+    requestUrl.pathname.startsWith("/api/") ||
+    requestUrl.pathname === "/manifest.webmanifest"
   ) {
     return;
   }
