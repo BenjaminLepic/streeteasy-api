@@ -18,6 +18,10 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const APP_MANIFEST = JSON.parse(
   fs.readFileSync(path.join(PUBLIC_DIR, "manifest.webmanifest"), "utf8"),
 );
+const USER_STATE_FILE =
+  process.env.USER_STATE_FILE ||
+  path.join(process.cwd(), ".first-look-data", "user-state.json");
+const MAX_STORED_LISTINGS = 5_000;
 const STREETEASY_API = "https://api-v6.streeteasy.com/";
 const DEFAULT_AREAS = [
   105, 106, 107, 108, 110, 112, 115, 116, 117, 146, 157, 162,
@@ -109,13 +113,78 @@ function sessionCookie(request) {
     .join("; ");
 }
 
+function normalizeStoredIds(value, key) {
+  if (!Array.isArray(value)) {
+    throw new Error(`${key} must be an array.`);
+  }
+
+  const ids = [...new Set(value.map((id) => String(id).trim()))];
+  if (ids.length > MAX_STORED_LISTINGS) {
+    throw new Error(
+      `${key} cannot contain more than ${MAX_STORED_LISTINGS} IDs.`,
+    );
+  }
+  if (ids.some((id) => !/^[A-Za-z0-9_-]{1,80}$/.test(id))) {
+    throw new Error(`${key} contains an invalid listing ID.`);
+  }
+  return ids;
+}
+
+function normalizeUserState(value, initialized = true) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    initialized,
+    viewedListings: normalizeStoredIds(
+      source.viewedListings || [],
+      "viewedListings",
+    ),
+    likedListings: normalizeStoredIds(
+      source.likedListings || [],
+      "likedListings",
+    ),
+    hiddenListings: normalizeStoredIds(
+      source.hiddenListings || [],
+      "hiddenListings",
+    ),
+    updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : null,
+  };
+}
+
+function readUserState(filePath = USER_STATE_FILE) {
+  try {
+    const stored = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return normalizeUserState(stored);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return normalizeUserState({}, false);
+    }
+    throw error;
+  }
+}
+
+function writeUserState(value, filePath = USER_STATE_FILE) {
+  const stored = {
+    ...normalizeUserState(value),
+    initialized: true,
+    updatedAt: new Date().toISOString(),
+  };
+  const directory = path.dirname(filePath);
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(stored, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  fs.renameSync(temporaryPath, filePath);
+  return stored;
+}
+
 function readJson(request) {
   return new Promise((resolve, reject) => {
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 10_000) {
+      if (body.length > 100_000) {
         reject(new Error("Request is too large."));
         request.destroy();
       }
@@ -855,7 +924,7 @@ function createServer() {
     if (
       AUTH_ENABLED &&
       (["/", "/index.html"].includes(url.pathname) ||
-        url.pathname.startsWith("/api/listings")) &&
+        url.pathname.startsWith("/api/")) &&
       !hasValidSession(request)
     ) {
       if (url.pathname.startsWith("/api/")) {
@@ -868,6 +937,29 @@ function createServer() {
           "Cache-Control": "no-store",
         });
         response.end();
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/user-state") {
+      try {
+        if (request.method === "GET") {
+          sendJson(response, 200, readUserState());
+          return;
+        }
+        if (request.method === "PUT") {
+          sendJson(response, 200, writeUserState(await readJson(request)));
+          return;
+        }
+        response.writeHead(405, { Allow: "GET, PUT" });
+        response.end("Method not allowed");
+      } catch (error) {
+        sendJson(response, 400, {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Saved listing state could not be updated.",
+        });
       }
       return;
     }
@@ -937,4 +1029,7 @@ module.exports = {
   latestActiveAt,
   parseSearchParams,
   passesAvenueBBoundary,
+  normalizeUserState,
+  readUserState,
+  writeUserState,
 };

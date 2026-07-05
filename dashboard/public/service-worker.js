@@ -1,9 +1,9 @@
-const CACHE_NAME = "first-look-shell-v3";
+const CACHE_NAME = "first-look-shell-v4";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=20260704",
-  "/app.js?v=20260704",
+  "/styles.css?v=20260705",
+  "/app.js?v=20260705",
   "/icon-192.png",
   "/icon-512.png",
   "/icon.svg",

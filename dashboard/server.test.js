@@ -1,12 +1,18 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { mkdtempSync, rmSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
 const {
   buildFilterLiteral,
   buildFullDetailsQuery,
   avenueBLongitudeAt,
   latestActiveAt,
+  normalizeUserState,
   parseSearchParams,
   passesAvenueBBoundary,
+  readUserState,
+  writeUserState,
 } = require("./server");
 
 test("parses the default downtown search criteria", () => {
@@ -84,4 +90,48 @@ test("follows Avenue B's angled centerline", () => {
   assert.equal(passesAvenueBBoundary(eastListing, "west"), false);
   assert.equal(passesAvenueBBoundary(eastListing, "east"), true);
   assert.equal(passesAvenueBBoundary(eastListing, "any"), true);
+});
+
+test("normalizes saved listing IDs", () => {
+  const state = normalizeUserState({
+    viewedListings: [5091098, "5091098"],
+    likedListings: ["5091099"],
+    hiddenListings: [],
+  });
+
+  assert.deepEqual(state.viewedListings, ["5091098"]);
+  assert.deepEqual(state.likedListings, ["5091099"]);
+  assert.throws(
+    () =>
+      normalizeUserState({
+        viewedListings: ["not a valid id"],
+        likedListings: [],
+        hiddenListings: [],
+      }),
+    /invalid listing ID/,
+  );
+});
+
+test("persists saved listing state across reads", (context) => {
+  const directory = mkdtempSync(join(tmpdir(), "first-look-state-"));
+  const filePath = join(directory, "user-state.json");
+  context.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  assert.equal(readUserState(filePath).initialized, false);
+
+  const written = writeUserState(
+    {
+      viewedListings: ["5091098"],
+      likedListings: ["5091099"],
+      hiddenListings: ["5091100"],
+    },
+    filePath,
+  );
+  const stored = readUserState(filePath);
+
+  assert.equal(written.initialized, true);
+  assert.deepEqual(stored.viewedListings, ["5091098"]);
+  assert.deepEqual(stored.likedListings, ["5091099"]);
+  assert.deepEqual(stored.hiddenListings, ["5091100"]);
+  assert.match(stored.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
 });

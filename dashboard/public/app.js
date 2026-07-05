@@ -34,6 +34,71 @@ function saveStoredIds(storageKey, ids) {
   }
 }
 
+function userStateSnapshot() {
+  return {
+    viewedListings: [...state.viewedListings],
+    likedListings: [...state.likedListings],
+    hiddenListings: [...state.hiddenListings],
+  };
+}
+
+function cacheUserState(value) {
+  saveStoredIds(VIEWED_STORAGE_KEY, value.viewedListings);
+  saveStoredIds(LIKED_STORAGE_KEY, value.likedListings);
+  saveStoredIds(HIDDEN_STORAGE_KEY, value.hiddenListings);
+}
+
+function applyUserState(value) {
+  state.viewedListings = new Set(value.viewedListings.map(String));
+  state.likedListings = new Set(value.likedListings.map(String));
+  state.hiddenListings = new Set(value.hiddenListings.map(String));
+  cacheUserState(state);
+}
+
+async function saveUserStateSnapshot(snapshot) {
+  const response = await fetch("/api/user-state", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(snapshot),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || "Saved-listing sync failed.");
+  }
+  return payload;
+}
+
+let userStateSaveQueue = Promise.resolve();
+
+function queueUserStateSave() {
+  const snapshot = userStateSnapshot();
+  userStateSaveQueue = userStateSaveQueue
+    .then(() => saveUserStateSnapshot(snapshot))
+    .catch(() => {
+      showNotice(
+        "Changes are saved on this device, but cross-device sync is temporarily unavailable.",
+      );
+    });
+}
+
+async function hydrateUserState() {
+  try {
+    const response = await fetch("/api/user-state");
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Saved-listing sync failed.");
+    }
+
+    if (payload.initialized) {
+      applyUserState(payload);
+    } else {
+      await saveUserStateSnapshot(userStateSnapshot());
+    }
+  } catch {
+    // Keep using the local copy when the server is temporarily unavailable.
+  }
+}
+
 const state = {
   selectedAreas: new Set(AREAS.map((area) => area.id)),
   listings: [],
@@ -526,8 +591,10 @@ function applyLikedState(card, listingId) {
 
 function markListingViewed(listingId, card) {
   const id = String(listingId);
+  const wasViewed = state.viewedListings.has(id);
   state.viewedListings.add(id);
   saveStoredIds(VIEWED_STORAGE_KEY, state.viewedListings);
+  if (!wasViewed) queueUserStateSave();
   applyViewedState(card, id);
   document
     .querySelector(`.timeline-marker[data-listing-id="${id}"]`)
@@ -537,8 +604,10 @@ function markListingViewed(listingId, card) {
 }
 
 function clearViewedListings() {
+  if (state.viewedListings.size === 0) return;
   state.viewedListings.clear();
   saveStoredIds(VIEWED_STORAGE_KEY, state.viewedListings);
+  queueUserStateSave();
   renderListings();
 }
 
@@ -551,6 +620,7 @@ function toggleListingLiked(listingId, card) {
     state.likedListings.add(id);
   }
   saveStoredIds(LIKED_STORAGE_KEY, state.likedListings);
+  queueUserStateSave();
 
   if (state.likedOnly && wasLiked) {
     renderListings();
@@ -573,12 +643,15 @@ function hideListing(listingId) {
   state.likedListings.delete(id);
   saveStoredIds(HIDDEN_STORAGE_KEY, state.hiddenListings);
   saveStoredIds(LIKED_STORAGE_KEY, state.likedListings);
+  queueUserStateSave();
   renderListings();
 }
 
 function restoreHiddenListings() {
+  if (state.hiddenListings.size === 0) return;
   state.hiddenListings.clear();
   saveStoredIds(HIDDEN_STORAGE_KEY, state.hiddenListings);
+  queueUserStateSave();
   renderListings();
 }
 
@@ -1380,13 +1453,18 @@ elements.sortOrder.addEventListener("change", () => {
   renderListings();
 });
 
-renderAreas();
-updateHours();
-updateViewedControls();
-updateLikedControls();
-updateHiddenControls();
-updatePolygonControls();
-scanListings();
+async function initializeApp() {
+  renderAreas();
+  updateHours();
+  await hydrateUserState();
+  updateViewedControls();
+  updateLikedControls();
+  updateHiddenControls();
+  updatePolygonControls();
+  scanListings();
+}
+
+initializeApp();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
