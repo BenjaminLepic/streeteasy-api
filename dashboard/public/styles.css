@@ -1192,6 +1192,28 @@ input[type="number"] {
   text-underline-offset: 5px;
 }
 
+.source-search-button {
+  min-height: 34px;
+  margin-top: auto;
+  padding: 0 10px;
+  border: 1px solid var(--positive);
+  background: #e5f6ef;
+  color: var(--positive);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.source-search-button + .listing-link {
+  margin-top: 12px;
+}
+
+.source-search-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 body.viewer-open {
   overflow: hidden;
 }
@@ -2316,8 +2338,18 @@ body.viewer-open {
   }
 
   .listing-link {
-    grid-row: 1 / span 2;
+    grid-row: 1;
     grid-column: 2;
+  }
+
+  .source-search-button {
+    grid-row: 2;
+    grid-column: 2;
+    margin-top: 8px;
+  }
+
+  .source-search-button + .listing-link {
+    margin-top: 0;
   }
 
   .listing-viewer {

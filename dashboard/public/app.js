@@ -657,6 +657,74 @@ function hideListing(listingId) {
   renderListings();
 }
 
+function listingMergeKey(listing) {
+  return listing.sourceUrl || listing.streetEasyUrl || listing.id;
+}
+
+function mergeSourceListings(listings = []) {
+  const existing = new Set(state.listings.map((listing) => listingMergeKey(listing)));
+  const added = [];
+  listings.forEach((listing) => {
+    const key = listingMergeKey(listing);
+    if (!key || existing.has(key)) return;
+    existing.add(key);
+    state.listings.push(listing);
+    added.push(listing);
+  });
+  return added;
+}
+
+async function runSourceSearchForListing(listing, button) {
+  if (button.disabled) return;
+
+  const previousText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Searching...";
+  showNotice(
+    `Checking ${listing.sourceGroupLabel || "the source site"} for matching rentals.`,
+  );
+
+  try {
+    const response = await fetch(
+      `/api/source-listings/from-listing?${buildSearchParams()}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listing }),
+      },
+    );
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "The source search could not complete.");
+    }
+
+    const added = mergeSourceListings(payload.listings || []);
+    renderListings();
+    if (added.length) {
+      showNotice(
+        `${payload.landlord || "Source search"} added ${added.length} matching ${
+          added.length === 1 ? "rental" : "rentals"
+        } from the broker site.`,
+      );
+      return;
+    }
+    showNotice(
+      payload.foundCount
+        ? `${payload.landlord || "Source search"} found rentals, but none matched the current filters.`
+        : `${payload.landlord || "Source search"} did not return active source-site rentals.`,
+    );
+  } catch (error) {
+    showNotice(
+      error instanceof Error
+        ? error.message
+        : "The source search could not complete.",
+    );
+  } finally {
+    button.disabled = false;
+    button.textContent = previousText;
+  }
+}
+
 function restoreHiddenListings() {
   if (state.hiddenListings.size === 0) return;
   state.hiddenListings.clear();
@@ -1117,6 +1185,11 @@ function createListingCard(listing, index) {
     event.preventDefault();
     openListingViewer(listing, card);
   });
+  const sourceSearchButton = card.querySelector(".source-search-button");
+  sourceSearchButton.hidden = isSourceListing;
+  sourceSearchButton.addEventListener("click", () =>
+    runSourceSearchForListing(listing, sourceSearchButton),
+  );
   card
     .querySelector(".like-button")
     .addEventListener("click", () => toggleListingLiked(listing.id, card));

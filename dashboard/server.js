@@ -1289,6 +1289,48 @@ async function findBrokerSourceListingsForRecentListings(seeds, criteria) {
   };
 }
 
+async function findBrokerSourceListingsForDashboardListing(seed, criteria) {
+  if (!seed || typeof seed !== "object") {
+    throw new AgentError("A First Look rental is required for source search.", 400);
+  }
+  if (seed.sourceOrigin === "broker_site") {
+    throw new AgentError("This rental already came from a broker source site.", 400);
+  }
+
+  const result = await runBrokerSourceAgentForSeed(seed, criteria);
+  const seen = new Set();
+  const listings = [];
+  (result.listings || []).forEach((sourceListing) => {
+    const normalized = normalizeLandlordListingForDashboard(
+      {
+        ...sourceListing,
+        landlord: sourceListing.landlord || result.landlord,
+        source: sourceListing.source || result.landlord,
+      },
+      seed,
+      criteria,
+    );
+    if (!normalized) return;
+    const key = sourceListingKey(sourceListing, normalized);
+    if (seen.has(key)) return;
+    seen.add(key);
+    listings.push(normalized);
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    seedListingId: String(seed.id),
+    seedAddress: [seed.street, seed.unit].filter(Boolean).join(" "),
+    landlord: result.landlord,
+    website: result.website || null,
+    sourceUrl: result.sourceUrl || null,
+    foundCount: (result.listings || []).length,
+    matchedListingCount: listings.length,
+    agentSteps: result.agentSteps || [],
+    listings,
+  };
+}
+
 async function maybeAppendSourceListings(result, criteria) {
   if (!criteria.includeSourceListings) return result;
 
@@ -2066,6 +2108,33 @@ function createServer() {
             error instanceof Error
               ? error.message
               : "The liked-rental scan could not complete.",
+        });
+      }
+      return;
+    }
+
+    if (
+      url.pathname === "/api/source-listings/from-listing" &&
+      request.method === "POST"
+    ) {
+      try {
+        const criteria = parseSearchParams(url.searchParams);
+        const body = await readJson(request);
+        sendJson(
+          response,
+          200,
+          await findBrokerSourceListingsForDashboardListing(
+            body.listing,
+            criteria,
+          ),
+        );
+      } catch (error) {
+        const status = error instanceof AgentError ? error.status : 400;
+        sendJson(response, status, {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The source search could not complete.",
         });
       }
       return;
