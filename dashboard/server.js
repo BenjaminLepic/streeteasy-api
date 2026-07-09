@@ -1436,7 +1436,7 @@ function createServer() {
     const protectedDashboardPage = ["/", "/index.html"].includes(url.pathname);
     const protectedApi =
       url.pathname.startsWith("/api/") &&
-      url.pathname !== "/api/landlord-listings";
+      !url.pathname.startsWith("/api/landlord-listings");
     if (
       AUTH_ENABLED &&
       (protectedDashboardPage || protectedApi) &&
