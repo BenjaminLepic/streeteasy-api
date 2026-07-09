@@ -6,7 +6,6 @@ const { join } = require("node:path");
 const {
   buildFilterLiteral,
   buildFullDetailsQuery,
-  extractLandlordSources,
   avenueBLongitudeAt,
   latestActiveAt,
   normalizeUserState,
@@ -182,22 +181,4 @@ test("normalizes Manhattan Skyline unit feed results", () => {
   assert.deepEqual(listings[0].facts.slice(0, 2), ["1 bed", "1 bath"]);
   assert.ok(listings[0].flags.includes("Featured"));
   assert.equal(listings[0].description, "Spacious one-bedroom apartment.");
-});
-
-test("extracts pasted StreetEasy sources for batch scans", () => {
-  const sources = extractLandlordSources(`
-    Saved rentals
-    https://streeteasy.com/building/117-sullivan-street-new_york/302
-    https://streeteasy.com/building/117-sullivan-street-new_york/302,
-    205 E 66th St
-  `);
-
-  assert.deepEqual(sources, [
-    "https://streeteasy.com/building/117-sullivan-street-new_york/302",
-    "205 E 66th St",
-  ]);
-
-  assert.deepEqual(extractLandlordSources(["117 Sullivan Street", "117 Sullivan Street"]), [
-    "117 Sullivan Street",
-  ]);
 });

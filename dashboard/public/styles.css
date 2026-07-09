@@ -1765,38 +1765,18 @@ body.viewer-open {
   text-transform: uppercase;
 }
 
-.agent-search textarea {
-  width: 100%;
-  min-height: 132px;
-  min-width: 0;
-  padding: 13px 14px;
-  resize: vertical;
-  border: 1px solid var(--line-dark);
-  background: #f8f9fb;
-}
-
-.agent-search-actions {
-  margin-top: 12px;
-  display: flex;
-  align-items: stretch;
-  justify-content: space-between;
+.agent-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
 }
 
-.agent-search-actions a {
+.agent-search input {
   min-height: 52px;
-  padding: 0 12px;
-  display: inline-flex;
-  align-items: center;
+  min-width: 0;
+  padding: 0 14px;
   border: 1px solid var(--line-dark);
-  color: var(--cobalt);
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  text-decoration: none;
-  white-space: nowrap;
+  background: #f8f9fb;
 }
 
 .agent-status-panel {
@@ -2406,8 +2386,7 @@ body.viewer-open {
     padding: 18px;
   }
 
-  .agent-search-actions {
-    display: grid;
+  .agent-search-row {
     grid-template-columns: 1fr;
   }
 

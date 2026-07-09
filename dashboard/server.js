@@ -872,7 +872,7 @@ function normalizeStreetSlug(value = "") {
 function parseStreetAddressFromInput(value = "") {
   const input = String(value);
   const match = input.match(
-    /\b(\d{1,5})\s+([A-Za-z0-9][A-Za-z0-9\s'.-]*?)\s+(street|st|avenue|ave|road|rd|place|pl|boulevard|blvd)\b/i,
+    /\b(\d{1,5})\s+([A-Za-z][A-Za-z\s'.-]*?)\s+(street|st|avenue|ave|road|rd|place|pl|boulevard|blvd)\b/i,
   );
   if (!match) return null;
   return `${match[1]} ${match[2].trim()} ${match[3]}`;
@@ -1240,85 +1240,6 @@ async function findLandlordListings(input) {
   return value;
 }
 
-function extractLandlordSources(value) {
-  const rawValues = Array.isArray(value) ? value : [value];
-  const sources = [];
-
-  rawValues.forEach((rawValue) => {
-    const text = String(rawValue || "").trim();
-    if (!text) return;
-
-    text.split(/\n+/).forEach((line) => {
-      const urls = line.match(/https?:\/\/(?:www\.)?streeteasy\.com\/[^\s"'<>]+/gi);
-      if (urls?.length) {
-        sources.push(...urls.map((url) => url.replace(/[),.;]+$/g, "")));
-        return;
-      }
-
-      const trimmedLine = line.trim();
-      if (parseStreetAddressFromInput(trimmedLine)) {
-        sources.push(trimmedLine);
-      }
-    });
-  });
-
-  return uniqueValues(sources).slice(0, 25);
-}
-
-async function findLandlordListingsBatch(value) {
-  const sources = extractLandlordSources(value);
-  if (!sources.length) {
-    throw new AgentError("Enter at least one StreetEasy listing URL or address.", 400);
-  }
-
-  const settled = await Promise.all(
-    sources.map(async (source) => {
-      try {
-        return {
-          source,
-          ok: true,
-          result: await findLandlordListings(source),
-        };
-      } catch (error) {
-        return {
-          source,
-          ok: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "The landlord agent could not complete this listing.",
-        };
-      }
-    }),
-  );
-
-  const listingKeys = new Set();
-  const listings = [];
-  settled.forEach((item) => {
-    if (!item.ok) return;
-    item.result.listings.forEach((listing) => {
-      const key = listing.url || listing.id;
-      if (key && listingKeys.has(key)) return;
-      if (key) listingKeys.add(key);
-      listings.push({
-        ...listing,
-        scanSource: item.source,
-        landlord: item.result.landlord,
-        streetEasyUrl: item.result.streetEasyUrl,
-      });
-    });
-  });
-
-  return {
-    generatedAt: new Date().toISOString(),
-    sourceCount: sources.length,
-    successCount: settled.filter((item) => item.ok).length,
-    errorCount: settled.filter((item) => !item.ok).length,
-    sources: settled,
-    listings,
-  };
-}
-
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -1440,7 +1361,7 @@ function createServer() {
     const protectedDashboardPage = ["/", "/index.html"].includes(url.pathname);
     const protectedApi =
       url.pathname.startsWith("/api/") &&
-      !url.pathname.startsWith("/api/landlord-listings");
+      url.pathname !== "/api/landlord-listings";
     if (
       AUTH_ENABLED &&
       (protectedDashboardPage || protectedApi) &&
@@ -1518,29 +1439,6 @@ function createServer() {
       return;
     }
 
-    if (
-      url.pathname === "/api/landlord-listings/batch" &&
-      request.method === "POST"
-    ) {
-      try {
-        const body = await readJson(request);
-        sendJson(
-          response,
-          200,
-          await findLandlordListingsBatch(body.sources ?? body.source ?? ""),
-        );
-      } catch (error) {
-        const status = error instanceof AgentError ? error.status : 400;
-        sendJson(response, status, {
-          error:
-            error instanceof Error
-              ? error.message
-              : "The landlord agent batch could not complete.",
-        });
-      }
-      return;
-    }
-
     const listingDetailsMatch = url.pathname.match(
       /^\/api\/listings\/([A-Za-z0-9_-]{1,80})$/,
     );
@@ -1587,9 +1485,7 @@ module.exports = {
   createServer,
   decorateListing,
   findLandlordListings,
-  findLandlordListingsBatch,
   avenueBLongitudeAt,
-  extractLandlordSources,
   latestActiveAt,
   normalizeStreetSlug,
   parseManhattanSkylineUnits,
