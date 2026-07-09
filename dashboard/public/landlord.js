@@ -1,5 +1,6 @@
 const elements = {
   form: document.querySelector("#agent-form"),
+  likedButton: document.querySelector("#scan-liked"),
   source: document.querySelector("#agent-source"),
   sync: document.querySelector("#agent-sync"),
   syncLabel: document.querySelector("#agent-sync-label"),
@@ -11,6 +12,8 @@ const elements = {
   steps: document.querySelector("#agent-steps"),
   listingGrid: document.querySelector("#agent-listing-grid"),
 };
+
+const LIKED_STORAGE_KEY = "first-look:liked-listings:v1";
 
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -35,13 +38,40 @@ function makeLink(label, href) {
 }
 
 function setLoading(loading) {
-  elements.form.querySelector("button").disabled = loading;
+  elements.form.querySelectorAll("button").forEach((button) => {
+    button.disabled = loading;
+  });
   elements.source.disabled = loading;
   elements.sync.classList.toggle("is-loading", loading);
   if (loading) {
     elements.sync.classList.remove("is-live");
     elements.syncLabel.textContent = "Agents running";
   }
+}
+
+function loadLocalLikedListingIds() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LIKED_STORAGE_KEY) || "[]");
+    return Array.isArray(stored) ? stored.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function loadLikedListingIds() {
+  const ids = new Set(loadLocalLikedListingIds());
+
+  try {
+    const response = await fetch("/api/user-state");
+    if (response.ok) {
+      const payload = await response.json();
+      (payload.likedListings || []).forEach((id) => ids.add(String(id)));
+    }
+  } catch {
+    // Local liked listings still work when the synced state is unavailable.
+  }
+
+  return [...ids];
 }
 
 function showNotice(message = "") {
@@ -102,6 +132,23 @@ function renderSummary(payload) {
   }
 }
 
+function renderLikedSummary(payload) {
+  elements.summary.hidden = false;
+  elements.summary.replaceChildren();
+
+  [
+    ["Liked", String(payload.likedCount || 0)],
+    ["Resolved", String(payload.successCount || 0)],
+    ["Generated", new Date(payload.generatedAt).toLocaleString()],
+  ].forEach(([label, value]) => {
+    const row = document.createElement("p");
+    row.append(makeTextElement("span", label), makeTextElement("strong", value));
+    elements.summary.append(row);
+  });
+
+  elements.sourceLinks.replaceChildren();
+}
+
 function formatPrice(price) {
   return Number.isFinite(Number(price)) ? `${currency.format(Number(price))}/mo` : "Price on request";
 }
@@ -132,7 +179,7 @@ function renderListing(listing, index) {
   main.append(
     makeTextElement(
       "p",
-      [listing.source, listing.address].filter(Boolean).join(" / "),
+      [listing.landlord || listing.source, listing.address].filter(Boolean).join(" / "),
       "section-kicker",
     ),
     makeTextElement(
@@ -163,6 +210,7 @@ function renderListing(listing, index) {
   const actions = document.createElement("div");
   actions.className = "agent-listing-actions";
   if (listing.url) actions.append(makeLink("Open listing", listing.url));
+  if (listing.streetEasyUrl) actions.append(makeLink("StreetEasy", listing.streetEasyUrl));
 
   article.append(visual, main, actions);
   return article;
@@ -185,6 +233,43 @@ function renderPayload(payload) {
     );
     return;
   }
+  listings.forEach((listing, index) => {
+    elements.listingGrid.append(renderListing(listing, index));
+  });
+}
+
+function renderLikedPayload(payload) {
+  const listings = payload.listings || [];
+  elements.resultCount.textContent = String(listings.length);
+  elements.resultLabel.textContent =
+    listings.length === 1 ? "landlord listing" : "landlord listings";
+  renderLikedSummary(payload);
+  renderSteps(
+    (payload.sources || []).map((item) => ({
+      agent: item.ok ? item.result.landlord : `First Look #${item.id}`,
+      status: item.ok ? "complete" : "partial",
+      detail: item.ok
+        ? `${item.result.listings.length} source listing${
+            item.result.listings.length === 1 ? "" : "s"
+          } found for ${item.source}`
+        : `${item.id}: ${item.error}`,
+      url: item.ok ? item.result.streetEasyUrl : null,
+    })),
+  );
+
+  elements.listingGrid.replaceChildren();
+  if (!listings.length) {
+    elements.listingGrid.append(
+      emptyState(
+        "No source listings found",
+        payload.errorCount
+          ? "The liked rentals were scanned, but no supported landlord sites returned active units."
+          : "The liked rentals resolved, but no active units were returned by source sites.",
+      ),
+    );
+    return;
+  }
+
   listings.forEach((listing, index) => {
     elements.listingGrid.append(renderListing(listing, index));
   });
@@ -240,9 +325,59 @@ async function runAgent(event) {
 }
 
 elements.form.addEventListener("submit", runAgent);
+elements.likedButton.addEventListener("click", async () => {
+  setLoading(true);
+  showNotice();
+
+  try {
+    const listingIds = await loadLikedListingIds();
+    if (!listingIds.length) {
+      throw new Error("No liked First Look rentals were found in this browser.");
+    }
+
+    const response = await fetch("/api/landlord-listings/from-ids", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ listingIds }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "The liked-rental scan could not finish.");
+    }
+
+    renderLikedPayload(payload);
+    const generatedAt = new Date(payload.generatedAt).toLocaleTimeString(
+      "en-US",
+      { hour: "numeric", minute: "2-digit" },
+    );
+    elements.sync.classList.add("is-live");
+    elements.syncLabel.textContent = `Liked scan / ${generatedAt}`;
+  } catch (error) {
+    elements.resultCount.textContent = "0";
+    elements.resultLabel.textContent = "landlord listings";
+    elements.summary.hidden = true;
+    elements.sourceLinks.replaceChildren();
+    renderSteps([]);
+    elements.listingGrid.replaceChildren(
+      emptyState(
+        "Liked scan stopped",
+        error instanceof Error
+          ? error.message
+          : "The liked-rental scan could not complete.",
+      ),
+    );
+    elements.sync.classList.remove("is-live");
+    elements.syncLabel.textContent = "Liked scan stopped";
+    showNotice(error instanceof Error ? error.message : "Liked scan failed.");
+  } finally {
+    setLoading(false);
+  }
+});
 
 const params = new URLSearchParams(window.location.search);
 if (params.get("source")) {
   elements.source.value = params.get("source");
   elements.form.requestSubmit();
+} else if (params.get("scan") === "liked") {
+  elements.likedButton.click();
 }

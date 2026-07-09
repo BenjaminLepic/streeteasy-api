@@ -8,6 +8,7 @@ const {
   buildFullDetailsQuery,
   avenueBLongitudeAt,
   latestActiveAt,
+  listingDetailsAgentSource,
   normalizeUserState,
   normalizeStreetSlug,
   parseManhattanSkylineUnits,
@@ -181,4 +182,26 @@ test("normalizes Manhattan Skyline unit feed results", () => {
   assert.deepEqual(listings[0].facts.slice(0, 2), ["1 bed", "1 bath"]);
   assert.ok(listings[0].flags.includes("Featured"));
   assert.equal(listings[0].description, "Spacious one-bedroom apartment.");
+});
+
+test("builds a landlord-agent source from First Look listing details", () => {
+  assert.equal(
+    listingDetailsAgentSource({
+      property: {
+        address: {
+          street: "117 Sullivan Street",
+          unit: "#3C",
+        },
+      },
+    }),
+    "117 Sullivan Street #3C",
+  );
+
+  assert.equal(
+    listingDetailsAgentSource({
+      property: { address: {} },
+      building: { address: { street: "117 Sullivan Street" } },
+    }),
+    "117 Sullivan Street",
+  );
 });

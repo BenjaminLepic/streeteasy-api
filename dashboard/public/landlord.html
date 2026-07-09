@@ -42,14 +42,17 @@
       <section class="agent-hero" aria-labelledby="agent-title">
         <div>
           <p class="eyebrow">StreetEasy scout + landlord-site agent</p>
-          <h1 id="agent-title">Follow the listing back to the source.</h1>
+          <h1 id="agent-title">Follow liked rentals back to the source.</h1>
           <p>
-            Paste a StreetEasy listing URL or address. The scout identifies the
-            landlord, then the source agent checks the landlord site for current
-            availability.
+            Scan rentals liked inside First Look, identify each landlord, then
+            check source sites for current availability.
           </p>
         </div>
         <form class="agent-search" id="agent-form">
+          <button class="primary-button" id="scan-liked" type="button">
+            Scan liked rentals
+          </button>
+          <div class="agent-divider" aria-hidden="true"></div>
           <label for="agent-source">StreetEasy listing or address</label>
           <div class="agent-search-row">
             <input
@@ -94,7 +97,7 @@
           <div class="empty-state">
             <span class="empty-mark" aria-hidden="true">AI</span>
             <h3>Ready to launch</h3>
-            <p>Start with 117 Sullivan Street or paste another listing.</p>
+            <p>Scan liked First Look rentals or run a direct listing.</p>
           </div>
         </div>
       </section>

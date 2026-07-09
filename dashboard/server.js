@@ -1240,6 +1240,81 @@ async function findLandlordListings(input) {
   return value;
 }
 
+function listingDetailsAgentSource(details) {
+  const address = details?.property?.address || {};
+  return [
+    address.street || details?.building?.address?.street,
+    address.unit,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+async function findLandlordListingsForListingIds(ids) {
+  const listingIds = normalizeStoredIds(ids || [], "listingIds");
+  if (!listingIds.length) {
+    throw new AgentError("No liked First Look rentals were found.", 400);
+  }
+  if (listingIds.length > 25) {
+    throw new AgentError("Scan 25 liked rentals or fewer at a time.", 400);
+  }
+
+  const settled = await Promise.all(
+    listingIds.map(async (id) => {
+      try {
+        const details = await findListingDetails(id);
+        const source = listingDetailsAgentSource(details);
+        if (!source) {
+          throw new AgentError("The listing address could not be resolved.", 422);
+        }
+        return {
+          id,
+          source,
+          ok: true,
+          result: await findLandlordListings(source),
+        };
+      } catch (error) {
+        return {
+          id,
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "The landlord agent could not complete this liked rental.",
+        };
+      }
+    }),
+  );
+
+  const listingKeys = new Set();
+  const listings = [];
+  settled.forEach((item) => {
+    if (!item.ok) return;
+    item.result.listings.forEach((listing) => {
+      const key = listing.url || listing.id;
+      if (key && listingKeys.has(key)) return;
+      if (key) listingKeys.add(key);
+      listings.push({
+        ...listing,
+        firstLookListingId: item.id,
+        scanSource: item.source,
+        landlord: item.result.landlord,
+        streetEasyUrl: item.result.streetEasyUrl,
+      });
+    });
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    likedCount: listingIds.length,
+    successCount: settled.filter((item) => item.ok).length,
+    errorCount: settled.filter((item) => !item.ok).length,
+    sources: settled,
+    listings,
+  };
+}
+
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -1439,6 +1514,29 @@ function createServer() {
       return;
     }
 
+    if (
+      url.pathname === "/api/landlord-listings/from-ids" &&
+      request.method === "POST"
+    ) {
+      try {
+        const body = await readJson(request);
+        sendJson(
+          response,
+          200,
+          await findLandlordListingsForListingIds(body.listingIds || []),
+        );
+      } catch (error) {
+        const status = error instanceof AgentError ? error.status : 400;
+        sendJson(response, status, {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The liked-rental scan could not complete.",
+        });
+      }
+      return;
+    }
+
     const listingDetailsMatch = url.pathname.match(
       /^\/api\/listings\/([A-Za-z0-9_-]{1,80})$/,
     );
@@ -1485,8 +1583,10 @@ module.exports = {
   createServer,
   decorateListing,
   findLandlordListings,
+  findLandlordListingsForListingIds,
   avenueBLongitudeAt,
   latestActiveAt,
+  listingDetailsAgentSource,
   normalizeStreetSlug,
   parseManhattanSkylineUnits,
   parseSearchParams,

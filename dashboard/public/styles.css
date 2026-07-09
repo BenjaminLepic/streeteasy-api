@@ -1754,6 +1754,16 @@ body.viewer-open {
   box-shadow: 9px 9px 0 var(--signal);
 }
 
+.agent-search > .primary-button {
+  width: 100%;
+}
+
+.agent-divider {
+  height: 1px;
+  margin: 18px 0;
+  background: var(--line);
+}
+
 .agent-search label {
   display: block;
   margin-bottom: 10px;
