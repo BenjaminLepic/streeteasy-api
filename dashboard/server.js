@@ -42,9 +42,12 @@ const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_PAGES = 5;
 const CACHE_TTL_MS = 60_000;
 const LANDLORD_CACHE_TTL_MS = 5 * 60_000;
-const AGENT_REQUEST_TIMEOUT_MS = 20_000;
 const BROKER_AGENT_ENDPOINT = process.env.BROKER_AGENT_ENDPOINT || "";
 const BROKER_AGENT_SECRET = process.env.BROKER_AGENT_SECRET || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_RESPONSES_URL =
+  process.env.OPENAI_RESPONSES_URL || "https://api.openai.com/v1/responses";
+const BROKER_AGENT_MODEL = process.env.BROKER_AGENT_MODEL || "gpt-4.1-mini";
 const BROKER_SOURCE_AGENT_LIMIT = boundedInteger(
   process.env.BROKER_SOURCE_AGENT_LIMIT,
   6,
@@ -56,6 +59,12 @@ const BROKER_AGENT_REQUEST_TIMEOUT_MS = boundedInteger(
   600_000,
   30_000,
   900_000,
+);
+const BROKER_AGENT_MAX_OUTPUT_TOKENS = boundedInteger(
+  process.env.BROKER_AGENT_MAX_OUTPUT_TOKENS,
+  6000,
+  1000,
+  20000,
 );
 const cache = new Map();
 const detailsCache = new Map();
@@ -1000,6 +1009,30 @@ function normalizeSourceUnit(listing) {
   return "";
 }
 
+function sourceListingGeoPoint(listing, seed) {
+  if (
+    Number.isFinite(Number(listing.geoPoint?.latitude)) &&
+    Number.isFinite(Number(listing.geoPoint?.longitude))
+  ) {
+    return {
+      latitude: Number(listing.geoPoint.latitude),
+      longitude: Number(listing.geoPoint.longitude),
+    };
+  }
+
+  if (
+    Number.isFinite(Number(listing.latitude)) &&
+    Number.isFinite(Number(listing.longitude))
+  ) {
+    return {
+      latitude: Number(listing.latitude),
+      longitude: Number(listing.longitude),
+    };
+  }
+
+  return seed?.geoPoint || null;
+}
+
 function normalizeLandlordListingForDashboard(listing, seed, criteria) {
   if (!matchesLandlordListingCriteria(listing, seed, criteria)) return null;
 
@@ -1043,7 +1076,7 @@ function normalizeLandlordListingForDashboard(listing, seed, criteria) {
     fullBathroomCount,
     halfBathroomCount,
     furnished: Boolean(listing.furnished),
-    geoPoint: listing.geoPoint || seed?.geoPoint || null,
+    geoPoint: sourceListingGeoPoint(listing, seed),
     hasTour3d: Boolean(listing.tour3dUrl || listing.three_d_tour_url),
     hasVideos: Boolean(listing.videoUrl || listing.videos),
     isNewDevelopment: Boolean(listing.isNewDevelopment),
@@ -1104,6 +1137,103 @@ function brokerAgentCriteriaPayload(criteria) {
   };
 }
 
+const BROKER_SOURCE_AGENT_RESULT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["landlord", "website", "sourceUrl", "listings", "agentSteps"],
+  properties: {
+    landlord: {
+      type: ["string", "null"],
+      description: "The broker, brokerage, landlord, or source company name.",
+    },
+    website: {
+      type: ["string", "null"],
+      description: "The company website used for the search.",
+    },
+    sourceUrl: {
+      type: ["string", "null"],
+      description: "The rental, availability, or listing page inspected.",
+    },
+    listings: {
+      type: "array",
+      description:
+        "Active rental listings found on the broker or landlord site, not aggregator pages.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "url",
+          "sourceUrl",
+          "source",
+          "landlord",
+          "broker",
+          "price",
+          "areaName",
+          "address",
+          "street",
+          "unit",
+          "bedrooms",
+          "bathrooms",
+          "squareFeet",
+          "latitude",
+          "longitude",
+          "imageUrl",
+          "availableOn",
+          "description",
+          "noFee",
+          "facts",
+          "flags",
+        ],
+        properties: {
+          url: { type: ["string", "null"] },
+          sourceUrl: { type: ["string", "null"] },
+          source: { type: ["string", "null"] },
+          landlord: { type: ["string", "null"] },
+          broker: { type: ["string", "null"] },
+          price: { type: ["number", "null"] },
+          areaName: { type: ["string", "null"] },
+          address: { type: ["string", "null"] },
+          street: { type: ["string", "null"] },
+          unit: { type: ["string", "null"] },
+          bedrooms: { type: ["number", "null"] },
+          bathrooms: { type: ["number", "null"] },
+          squareFeet: { type: ["number", "null"] },
+          latitude: { type: ["number", "null"] },
+          longitude: { type: ["number", "null"] },
+          imageUrl: { type: ["string", "null"] },
+          availableOn: { type: ["string", "null"] },
+          description: { type: ["string", "null"] },
+          noFee: { type: ["boolean", "null"] },
+          facts: { type: "array", items: { type: "string" } },
+          flags: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+    agentSteps: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["agent", "status", "detail", "url"],
+        properties: {
+          agent: { type: "string" },
+          status: { type: "string", enum: ["complete", "partial", "skipped"] },
+          detail: { type: "string" },
+          url: { type: ["string", "null"] },
+        },
+      },
+    },
+  },
+};
+
+function brokerAgentConfigured() {
+  return Boolean(BROKER_AGENT_ENDPOINT || OPENAI_API_KEY);
+}
+
+function brokerAgentConfigurationMessage() {
+  return "Set OPENAI_API_KEY or BROKER_AGENT_ENDPOINT to enable the generic source-site AI agent.";
+}
+
 function normalizeExternalAgentResult(payload, seed) {
   return {
     landlord:
@@ -1129,6 +1259,155 @@ function normalizeExternalAgentResult(payload, seed) {
             },
           ],
   };
+}
+
+function extractOpenAiOutputText(payload) {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const chunks = [];
+  (payload?.output || []).forEach((item) => {
+    if (item?.type !== "message" || !Array.isArray(item.content)) return;
+    item.content.forEach((content) => {
+      if (typeof content?.text === "string") chunks.push(content.text);
+    });
+  });
+  return chunks.join("\n").trim();
+}
+
+function extractOpenAiRefusal(payload) {
+  for (const item of payload?.output || []) {
+    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+    const refused = item.content.find((content) => content?.refusal);
+    if (refused) return refused.refusal;
+  }
+  return null;
+}
+
+function openAiBrokerAgentPrompt(seed, criteria) {
+  return JSON.stringify(
+    {
+      currentDate: new Date().toISOString().slice(0, 10),
+      task:
+        "Find the broker/landlord/company website for this fresh StreetEasy rental, traverse that company site, and return active rental listings from that source site that match the supplied filters.",
+      constraints: [
+        "Do not use a known-landlord adapter or prior landlord-specific knowledge.",
+        "Use web search to identify the source company website from the seed listing.",
+        "Prefer the company's own website and direct availability/listing pages.",
+        "Do not return StreetEasy, Zillow, Apartments.com, RentHop, Realtor.com, or other aggregator URLs as source listings.",
+        "Only include listings that appear active and plausibly match the requested price, bedrooms, bathrooms, and neighborhood/area.",
+        "If a value is not visible on the source site, return null rather than guessing.",
+        "Assume returned source-site rentals are not on StreetEasy. Do not spend time checking StreetEasy duplication.",
+      ],
+      seedListing: brokerAgentSeedPayload(seed),
+      criteria: brokerAgentCriteriaPayload(criteria),
+      outputNotes: [
+        "Return empty listings if the source website cannot be confidently found or has no matching active rentals.",
+        "Use areaName values like the source site presents them, for example Soho or East Village.",
+        "Put the best direct listing page in url; put the page you searched in sourceUrl.",
+      ],
+    },
+    null,
+    2,
+  );
+}
+
+function parseOpenAiBrokerAgentPayload(payload) {
+  if (payload?.status === "incomplete") {
+    throw new AgentError(
+      payload.incomplete_details?.reason
+        ? `The OpenAI source-site agent stopped early: ${payload.incomplete_details.reason}.`
+        : "The OpenAI source-site agent stopped before finishing.",
+      502,
+    );
+  }
+
+  const refusal = extractOpenAiRefusal(payload);
+  if (refusal) {
+    throw new AgentError(`The OpenAI source-site agent refused: ${refusal}`, 502);
+  }
+
+  const text = extractOpenAiOutputText(payload);
+  if (!text) {
+    throw new AgentError("The OpenAI source-site agent returned no listing JSON.", 502);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new AgentError("The OpenAI source-site agent returned invalid JSON.", 502);
+  }
+}
+
+async function runOpenAiBrokerAgent(seed, criteria) {
+  if (!OPENAI_API_KEY) {
+    throw new AgentError(
+      "Set OPENAI_API_KEY to enable the generic source-site AI agent.",
+      422,
+    );
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    BROKER_AGENT_REQUEST_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(OPENAI_RESPONSES_URL, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: BROKER_AGENT_MODEL,
+        store: false,
+        tools: [{ type: "web_search", external_web_access: true }],
+        tool_choice: "required",
+        include: ["web_search_call.action.sources"],
+        max_output_tokens: BROKER_AGENT_MAX_OUTPUT_TOKENS,
+        input: [
+          {
+            role: "system",
+            content:
+              "You are a versatile web research agent for a NYC rental dashboard. You do not have hardcoded landlord adapters. Search the web, identify the source company website for the seed rental, inspect that company's own rental pages, and return only structured active rental candidates.",
+          },
+          { role: "user", content: openAiBrokerAgentPrompt(seed, criteria) },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "broker_source_listing_result",
+            strict: true,
+            schema: BROKER_SOURCE_AGENT_RESULT_SCHEMA,
+          },
+        },
+      }),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload) {
+      throw new AgentError(
+        payload?.error?.message ||
+          `The OpenAI source-site agent returned HTTP ${response.status}.`,
+        response.status >= 500 ? 502 : response.status,
+      );
+    }
+
+    const parsed = parseOpenAiBrokerAgentPayload(payload);
+    return normalizeExternalAgentResult(parsed, seed);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new AgentError("The OpenAI source-site agent did not finish in time.", 504);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function runExternalBrokerAgent(seed, criteria) {
@@ -1191,38 +1470,37 @@ async function runExternalBrokerAgent(seed, criteria) {
   }
 }
 
-async function runBrokerSourceAgentForSeed(seed, criteria) {
-  try {
-    const builtInResult = await findLandlordListings(
-      seed.streetEasyUrl || `${seed.street} ${seed.unit}`,
-    );
-    if (/manhattan\s+skyline/i.test(builtInResult.landlord || "")) {
-      try {
-        return await runManhattanSkylinePortfolioAgent(seed, builtInResult);
-      } catch {
-        return builtInResult;
-      }
-    }
-    return builtInResult;
-  } catch (builtInError) {
-    if (!BROKER_AGENT_ENDPOINT) throw builtInError;
-    try {
-      return await runExternalBrokerAgent(seed, criteria);
-    } catch (externalError) {
-      const builtInMessage =
-        builtInError instanceof Error
-          ? builtInError.message
-          : "The built-in source agent did not complete.";
-      const externalMessage =
-        externalError instanceof Error
-          ? externalError.message
-          : "The configured broker agent did not complete.";
-      throw new AgentError(`${builtInMessage} ${externalMessage}`, 422);
-    }
+async function runGenericBrokerAgent(seed, criteria) {
+  if (!brokerAgentConfigured()) {
+    throw new AgentError(brokerAgentConfigurationMessage(), 422);
   }
+  if (BROKER_AGENT_ENDPOINT) {
+    return runExternalBrokerAgent(seed, criteria);
+  }
+  return runOpenAiBrokerAgent(seed, criteria);
+}
+
+async function runBrokerSourceAgentForSeed(seed, criteria) {
+  return runGenericBrokerAgent(seed, criteria);
 }
 
 async function findBrokerSourceListingsForRecentListings(seeds, criteria) {
+  if (!brokerAgentConfigured()) {
+    return {
+      enabled: false,
+      generatedAt: new Date().toISOString(),
+      configuredGenericAgent: false,
+      configurationError: brokerAgentConfigurationMessage(),
+      seedLimit: BROKER_SOURCE_AGENT_LIMIT,
+      searchedSeedCount: 0,
+      successCount: 0,
+      errorCount: 1,
+      matchedListingCount: 0,
+      sources: [],
+      listings: [],
+    };
+  }
+
   const selectedSeeds = seeds
     .filter((listing) => listing.streetEasyUrl || listing.street)
     .slice(0, BROKER_SOURCE_AGENT_LIMIT);
@@ -1278,7 +1556,7 @@ async function findBrokerSourceListingsForRecentListings(seeds, criteria) {
   return {
     enabled: true,
     generatedAt: new Date().toISOString(),
-    configuredGenericAgent: Boolean(BROKER_AGENT_ENDPOINT),
+    configuredGenericAgent: brokerAgentConfigured(),
     seedLimit: BROKER_SOURCE_AGENT_LIMIT,
     searchedSeedCount: selectedSeeds.length,
     successCount: sources.filter((source) => source.ok).length,
@@ -1350,54 +1628,8 @@ async function maybeAppendSourceListings(result, criteria) {
   };
 }
 
-function decodeHtml(value = "") {
-  return String(value)
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ");
-}
-
-function stripHtml(value = "") {
-  return decodeHtml(
-    String(value)
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " "),
-  )
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
-}
-
-function makeAbsoluteUrl(value, baseUrl) {
-  try {
-    return new URL(value, baseUrl).href;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeStreetSlug(value = "") {
-  const normalized = String(value)
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/#/g, " ")
-    .replace(/\b(street|st)\b/g, "street")
-    .replace(/\b(avenue|ave)\b/g, "avenue")
-    .replace(/\b(east|e)\b/g, "east")
-    .replace(/\b(west|w)\b/g, "west")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  return normalized || null;
 }
 
 function parseStreetAddressFromInput(value = "") {
@@ -1407,14 +1639,6 @@ function parseStreetAddressFromInput(value = "") {
   );
   if (!match) return null;
   return `${match[1]} ${match[2].trim()} ${match[3]}`;
-}
-
-function parseStreetAddressFromSlug(value = "") {
-  const source = String(value)
-    .toLowerCase()
-    .replace(/[_-]new[_-]york.*/i, "")
-    .replace(/[_-]+/g, " ");
-  return parseStreetAddressFromInput(source);
 }
 
 function streetEasyUrlFromInput(value = "") {
@@ -1430,385 +1654,53 @@ function streetEasyUrlFromInput(value = "") {
   return urlMatch ? urlMatch[0] : null;
 }
 
-function inferKnownStreetEasyUrl(input = "") {
-  const source = String(input).toLowerCase();
-  if (/\b117\s+sullivan\b/.test(source)) {
-    return "https://streeteasy.com/building/117-sullivan-street-new_york/302";
-  }
-  return null;
-}
-
-async function fetchAgentText(url, { accept = "text/html,*/*" } = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: accept,
-        "Accept-Language": "en-US,en;q=0.9",
-        Referer: "https://streeteasy.com/",
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-      },
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new AgentError(
-        `${new URL(url).hostname} returned HTTP ${response.status}.`,
-        response.status >= 500 ? 502 : response.status,
-      );
-    }
-    return text;
-  } catch (error) {
-    if (error.name === "AbortError") {
-      throw new AgentError(`${new URL(url).hostname} did not respond in time.`, 504);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function fetchAgentJson(url) {
-  const text = await fetchAgentText(url, { accept: "application/json,*/*" });
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new AgentError(`${new URL(url).hostname} returned invalid JSON.`);
-  }
-}
-
-function extractPageTitle(html = "") {
-  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
-  return title ? stripHtml(title) : null;
-}
-
-function extractMetaContent(html = "", name) {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regexes = [
-    new RegExp(
-      `<meta[^>]+(?:name|property)=["']${escapedName}["'][^>]+content=["']([^"']+)["'][^>]*>`,
-      "i",
-    ),
-    new RegExp(
-      `<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']${escapedName}["'][^>]*>`,
-      "i",
-    ),
-  ];
-  const match = regexes.map((regex) => html.match(regex)).find(Boolean);
-  return match ? decodeHtml(match[1]).trim() : null;
-}
-
-function extractStreetEasyContext(input, html = "") {
-  const text = stripHtml(html);
-  const title = extractPageTitle(html);
-  const description = extractMetaContent(html, "description");
-  const address =
-    parseStreetAddressFromInput(`${title || ""} ${description || ""}`) ||
-    parseStreetAddressFromInput(text) ||
-    parseStreetAddressFromSlug(input) ||
-    parseStreetAddressFromInput(input);
-  const landlord = /manhattan\s+skyline/i.test(`${html} ${input}`)
-    ? "Manhattan Skyline"
-    : null;
-
+function seedFromAgentInput(input) {
+  const source = String(input || "").trim();
+  const streetEasyUrl = streetEasyUrlFromInput(source);
+  const address = parseStreetAddressFromInput(source) || source;
   return {
-    address,
-    title,
-    description,
-    landlord,
-    streetEasyUrl: streetEasyUrlFromInput(input) || inferKnownStreetEasyUrl(input),
+    id: `source-${createHash("sha256").update(source).digest("hex").slice(0, 12)}`,
+    streetEasyUrl,
+    street: address,
+    unit: "",
+    areaName: null,
+    price: null,
+    bedroomCount: null,
+    fullBathroomCount: null,
+    halfBathroomCount: null,
+    geoPoint: null,
+    sourceGroupLabel: null,
   };
 }
 
-function inferLandlordFromContext(context, input = "") {
-  if (context.landlord) return context.landlord;
+async function findLandlordListings(
+  input,
+  criteria = parseSearchParams(new URLSearchParams()),
+) {
+  const source = String(input || "").trim();
+  if (!source) throw new AgentError("Enter a StreetEasy listing URL or address.", 400);
 
-  const source = `${context.address || ""} ${context.title || ""} ${
-    context.description || ""
-  } ${input}`;
-  const searchableSource = source.replace(/[_-]+/g, " ");
-  if (/\b(10[7-9]|11[13579])\s+sullivan\b/i.test(searchableSource)) {
-    return "Manhattan Skyline";
-  }
-  if (/\b117\s+sullivan\b/i.test(searchableSource)) return "Manhattan Skyline";
-  return null;
-}
-
-function buildingSlugFromContext(context, input = "") {
-  const address =
-    context.address ||
-    parseStreetAddressFromSlug(context.streetEasyUrl || "") ||
-    parseStreetAddressFromInput(context.streetEasyUrl || "") ||
-    parseStreetAddressFromSlug(input) ||
-    parseStreetAddressFromInput(input);
-  if (address) return normalizeStreetSlug(address);
-
-  const url = context.streetEasyUrl || input;
-  const match = String(url).match(/\/building\/([^/_?#]+(?:-[^/_?#]+)*)/i);
-  return match ? match[1].replace(/-new-york$/i, "") : null;
-}
-
-async function runStreetEasyScoutAgent(input) {
-  const streetEasyUrl = streetEasyUrlFromInput(input) || inferKnownStreetEasyUrl(input);
-  if (!streetEasyUrl) {
-    const context = extractStreetEasyContext(input);
-    return {
-      ...context,
-      landlord: inferLandlordFromContext(context, input),
-      steps: [
-        {
-          agent: "StreetEasy scout",
-          status: "skipped",
-          detail: "No StreetEasy URL was supplied, so the scout used the typed address.",
-        },
-      ],
-    };
-  }
-
-  try {
-    const html = await fetchAgentText(streetEasyUrl);
-    const context = extractStreetEasyContext(streetEasyUrl, html);
-    return {
-      ...context,
-      streetEasyUrl,
-      landlord: inferLandlordFromContext(context, input),
-      steps: [
-        {
-          agent: "StreetEasy scout",
-          status: "complete",
-          detail: "Fetched the StreetEasy listing page and extracted address/landlord hints.",
-          url: streetEasyUrl,
-        },
-      ],
-    };
-  } catch (error) {
-    const context = extractStreetEasyContext(input);
-    return {
-      ...context,
-      streetEasyUrl,
-      landlord: inferLandlordFromContext(context, input),
-      steps: [
-        {
-          agent: "StreetEasy scout",
-          status: "partial",
-          detail:
-            error instanceof Error
-              ? error.message
-              : "StreetEasy could not be fetched; using typed context.",
-          url: streetEasyUrl,
-        },
-      ],
-    };
-  }
-}
-
-function normalizeManhattanSkylineUnit(unit, building, sourceUrl) {
-  const image =
-    unit.card_images?.find((item) => item.card || item.src) ||
-    unit.images?.find((item) => item.card || item.src) ||
-    null;
-  const availableOn = unit.available_on || unit.availableOn || null;
-  const price = Number(unit.price);
-  const latLng = building?.address?.latLng;
-  const facts = uniqueValues([
-    unit.bedrooms === 0
-      ? "Studio"
-      : Number.isFinite(Number(unit.bedrooms))
-        ? `${Number(unit.bedrooms)} bed`
-        : null,
-    Number.isFinite(Number(unit.bathrooms))
-      ? `${Number(unit.bathrooms)} bath`
-      : null,
-    unit.square_footage ? `${Number(unit.square_footage).toLocaleString()} sqft` : null,
-    availableOn ? `Available ${availableOn}` : "Available now",
-  ]);
-
-  return {
-    id: `manhattan-skyline:${unit.slug || unit.number || unit.url}`,
-    source: "Manhattan Skyline",
-    building: building?.name || building?.display_name || "Manhattan Skyline building",
-    address:
-      building?.name ||
-      building?.address?.display_name ||
-      building?.address?.street ||
-      null,
-    areaName: building?.neighborhood?.name || null,
-    geoPoint:
-      Number.isFinite(Number(latLng?.lat)) && Number.isFinite(Number(latLng?.lng))
-        ? {
-            latitude: Number(latLng.lat),
-            longitude: Number(latLng.lng),
-          }
-        : null,
-    unit: unit.number ? `#${unit.number}` : null,
-    price: Number.isFinite(price) ? price : null,
-    bedrooms: unit.bedrooms ?? null,
-    bathrooms: unit.bathrooms ?? null,
-    squareFeet: unit.square_footage ?? null,
-    availableOn,
-    description: stripHtml(unit.body || unit.highlight || ""),
-    facts,
-    flags: uniqueValues([
-      unit.featured === "Yes" ? "Featured" : null,
-      unit.videos ? "Video" : null,
-      unit.three_d_tour_url ? "3D tour" : null,
-      Number(unit.concession_months_free) > 0
-        ? `${Number(unit.concession_months_free)} mo. free`
-        : null,
-    ]),
-    imageUrl: image?.card || image?.src || null,
-    url: makeAbsoluteUrl(unit.url, sourceUrl),
-  };
-}
-
-function parseManhattanSkylineUnits(payload, sourceUrl) {
-  const data = payload?.units?.data || payload?.data || [];
-  return data
-    .map((unit) => normalizeManhattanSkylineUnit(unit, unit.building, sourceUrl))
-    .filter((listing) => listing.url || listing.unit || listing.price);
-}
-
-function manhattanSkylineNeighborhoodSlug(areaName) {
-  const normalized = normalizeStreetSlug(areaName || "");
-  if (!normalized) return null;
-  if (normalized === "soho") return "soho";
-  return normalized;
-}
-
-async function runManhattanSkylinePortfolioAgent(seed, fallbackResult = null) {
-  const neighborhoodSlug = manhattanSkylineNeighborhoodSlug(seed.areaName);
-  const apiUrl = neighborhoodSlug
-    ? `https://manhattanskyline.com/api/units?neighborhoods=${encodeURIComponent(
-        neighborhoodSlug,
-      )}`
-    : "https://manhattanskyline.com/api/units";
-  const payload = await fetchAgentJson(apiUrl);
-  const listings = parseManhattanSkylineUnits(payload, apiUrl);
-  return {
-    website: "https://manhattanskyline.com",
-    sourceUrl: apiUrl,
-    buildingUrl: fallbackResult?.buildingUrl || "https://manhattanskyline.com/apartments",
-    landlord: "Manhattan Skyline",
-    listings,
-    agentSteps: [
-      ...(fallbackResult?.agentSteps || []),
-      {
-        agent: "Landlord site agent",
-        status: "complete",
-        detail: neighborhoodSlug
-          ? `Loaded Manhattan Skyline's public unit feed for ${seed.areaName}.`
-          : "Loaded Manhattan Skyline's public portfolio unit feed.",
-        url: apiUrl,
-      },
-    ],
-  };
-}
-
-async function runManhattanSkylineAgent(context, input) {
-  const buildingSlug = buildingSlugFromContext(context, input);
-  if (!buildingSlug) {
-    throw new AgentError("The Manhattan Skyline agent could not infer a building slug.", 400);
-  }
-
-  const buildingUrl = `https://manhattanskyline.com/buildings/soho/${buildingSlug}`;
-  let verifiedBuildingUrl = buildingUrl;
-  let buildingHtml = "";
-  try {
-    buildingHtml = await fetchAgentText(buildingUrl);
-  } catch (error) {
-    if (buildingSlug !== "111-sullivan-street") throw error;
-  }
-
-  const embeddedSlug =
-    buildingHtml.match(/<unit-list[^>]+:params="\{\s*buildings:\s*'([^']+)'/i)?.[1] ||
-    buildingSlug;
-  const apiUrl = `https://manhattanskyline.com/api/units?buildings=${encodeURIComponent(
-    embeddedSlug,
-  )}`;
-  const payload = await fetchAgentJson(apiUrl);
-  const listings = parseManhattanSkylineUnits(payload, apiUrl);
-  if (!listings.length && buildingSlug !== "111-sullivan-street") {
-    const parentUrl = "https://manhattanskyline.com/buildings/soho/111-sullivan-street";
-    const parentHtml = await fetchAgentText(parentUrl);
-    const parentSlug =
-      parentHtml.match(/<unit-list[^>]+:params="\{\s*buildings:\s*'([^']+)'/i)?.[1] ||
-      "111-sullivan-street";
-    const parentApiUrl = `https://manhattanskyline.com/api/units?buildings=${encodeURIComponent(
-      parentSlug,
-    )}`;
-    const parentPayload = await fetchAgentJson(parentApiUrl);
-    verifiedBuildingUrl = parentUrl;
-    return {
-      website: "https://manhattanskyline.com",
-      sourceUrl: parentApiUrl,
-      buildingUrl: verifiedBuildingUrl,
-      listings: parseManhattanSkylineUnits(parentPayload, parentApiUrl),
-      steps: [
-        {
-          agent: "Landlord site agent",
-          status: "complete",
-          detail:
-            "Checked the exact building endpoint, then fell back to the Sullivan Mews portfolio page.",
-          url: parentApiUrl,
-        },
-      ],
-    };
-  }
-
-  return {
-    website: "https://manhattanskyline.com",
-    sourceUrl: apiUrl,
-    buildingUrl: verifiedBuildingUrl,
-    listings,
-    steps: [
-      {
-        agent: "Landlord site agent",
-        status: "complete",
-        detail: "Loaded Manhattan Skyline's public unit API for the inferred building.",
-        url: apiUrl,
-      },
-    ],
-  };
-}
-
-async function findLandlordListings(input) {
-  const key = String(input || "").trim().toLowerCase();
-  if (!key) throw new AgentError("Enter a StreetEasy listing URL or address.", 400);
-
+  const key = JSON.stringify({
+    source: source.toLowerCase(),
+    criteria: brokerAgentCriteriaPayload(criteria),
+  });
   const cached = landlordAgentCache.get(key);
   if (cached && Date.now() - cached.savedAt < LANDLORD_CACHE_TTL_MS) {
     return { ...cached.value, cached: true };
   }
 
-  const scout = await runStreetEasyScoutAgent(input);
-  const landlord = inferLandlordFromContext(scout, input);
-  if (!landlord) {
-    throw new AgentError(
-      "The agent could not identify a supported landlord from that listing yet.",
-      422,
-    );
-  }
-
-  let landlordResult;
-  if (/manhattan\s+skyline/i.test(landlord)) {
-    landlordResult = await runManhattanSkylineAgent({ ...scout, landlord }, input);
-  } else {
-    throw new AgentError(`${landlord} is not supported by a landlord-site agent yet.`, 422);
-  }
-
+  const seed = seedFromAgentInput(source);
+  const result = await runGenericBrokerAgent(seed, criteria);
   const value = {
-    input,
-    landlord,
-    address: scout.address,
-    streetEasyUrl: scout.streetEasyUrl,
-    website: landlordResult.website,
-    buildingUrl: landlordResult.buildingUrl,
-    sourceUrl: landlordResult.sourceUrl,
-    listings: landlordResult.listings,
-    agentSteps: [...(scout.steps || []), ...(landlordResult.steps || [])],
+    input: source,
+    landlord: result.landlord,
+    address: seed.street,
+    streetEasyUrl: seed.streetEasyUrl,
+    website: result.website,
+    buildingUrl: result.buildingUrl,
+    sourceUrl: result.sourceUrl,
+    listings: result.listings,
+    agentSteps: result.agentSteps || [],
     generatedAt: new Date().toISOString(),
     cached: false,
   };
@@ -1857,7 +1749,7 @@ async function findLandlordListingsForListingIds(ids) {
           error:
             error instanceof Error
               ? error.message
-              : "The landlord agent could not complete this liked rental.",
+              : "The source agent could not complete this liked rental.",
         };
       }
     }),
@@ -2084,7 +1976,7 @@ function createServer() {
           error:
             error instanceof Error
               ? error.message
-              : "The landlord agent could not complete the search.",
+              : "The source agent could not complete the search.",
         });
       }
       return;
@@ -2189,11 +2081,11 @@ module.exports = {
   findLandlordListingsForListingIds,
   avenueBLongitudeAt,
   latestActiveAt,
+  extractOpenAiOutputText,
   listingDetailsAgentSource,
   matchesLandlordListingCriteria,
+  normalizeExternalAgentResult,
   normalizeLandlordListingForDashboard,
-  normalizeStreetSlug,
-  parseManhattanSkylineUnits,
   parseSearchParams,
   passesAvenueBBoundary,
   normalizeUserState,

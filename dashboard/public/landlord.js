@@ -109,7 +109,7 @@ function renderSummary(payload) {
   elements.summary.replaceChildren();
 
   const items = [
-    ["Landlord", payload.landlord],
+    ["Source", payload.landlord],
     ["Address", payload.address],
     ["Generated", new Date(payload.generatedAt).toLocaleString()],
   ].filter(([, value]) => value);
@@ -125,10 +125,10 @@ function renderSummary(payload) {
     elements.sourceLinks.append(makeLink("StreetEasy", payload.streetEasyUrl));
   }
   if (payload.buildingUrl) {
-    elements.sourceLinks.append(makeLink("Landlord page", payload.buildingUrl));
+    elements.sourceLinks.append(makeLink("Source page", payload.buildingUrl));
   }
   if (payload.sourceUrl) {
-    elements.sourceLinks.append(makeLink("Unit feed", payload.sourceUrl));
+    elements.sourceLinks.append(makeLink("Source listings", payload.sourceUrl));
   }
 }
 
@@ -220,7 +220,7 @@ function renderPayload(payload) {
   const listings = payload.listings || [];
   elements.resultCount.textContent = String(listings.length);
   elements.resultLabel.textContent =
-    listings.length === 1 ? "landlord listing" : "landlord listings";
+    listings.length === 1 ? "source listing" : "source listings";
   renderSummary(payload);
   renderSteps(payload.agentSteps || []);
   elements.listingGrid.replaceChildren();
@@ -228,7 +228,7 @@ function renderPayload(payload) {
     elements.listingGrid.append(
       emptyState(
         "No source listings found",
-        "The landlord was identified, but no active units were returned by the landlord site.",
+        "The source was checked, but no active units were returned by the source site.",
       ),
     );
     return;
@@ -242,7 +242,7 @@ function renderLikedPayload(payload) {
   const listings = payload.listings || [];
   elements.resultCount.textContent = String(listings.length);
   elements.resultLabel.textContent =
-    listings.length === 1 ? "landlord listing" : "landlord listings";
+    listings.length === 1 ? "source listing" : "source listings";
   renderLikedSummary(payload);
   renderSteps(
     (payload.sources || []).map((item) => ({
@@ -263,7 +263,7 @@ function renderLikedPayload(payload) {
       emptyState(
         "No source listings found",
         payload.errorCount
-          ? "The liked rentals were scanned, but no supported landlord sites returned active units."
+          ? "The liked rentals were scanned, but no source sites returned active units."
           : "The liked rentals resolved, but no active units were returned by source sites.",
       ),
     );
@@ -291,7 +291,7 @@ async function runAgent(event) {
     );
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || "The landlord agent could not finish.");
+      throw new Error(payload.error || "The source agent could not finish.");
     }
     renderPayload(payload);
     const generatedAt = new Date(payload.generatedAt).toLocaleTimeString(
@@ -304,7 +304,7 @@ async function runAgent(event) {
       : `Agent complete / ${generatedAt}`;
   } catch (error) {
     elements.resultCount.textContent = "0";
-    elements.resultLabel.textContent = "landlord listings";
+    elements.resultLabel.textContent = "source listings";
     elements.summary.hidden = true;
     elements.sourceLinks.replaceChildren();
     renderSteps([]);
@@ -313,7 +313,7 @@ async function runAgent(event) {
         "Agent stopped",
         error instanceof Error
           ? error.message
-          : "The landlord agent could not complete the search.",
+          : "The source agent could not complete the search.",
       ),
     );
     elements.sync.classList.remove("is-live");
@@ -354,7 +354,7 @@ elements.likedButton.addEventListener("click", async () => {
     elements.syncLabel.textContent = `Liked scan / ${generatedAt}`;
   } catch (error) {
     elements.resultCount.textContent = "0";
-    elements.resultLabel.textContent = "landlord listings";
+    elements.resultLabel.textContent = "source listings";
     elements.summary.hidden = true;
     elements.sourceLinks.replaceChildren();
     renderSteps([]);

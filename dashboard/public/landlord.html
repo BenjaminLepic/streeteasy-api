@@ -8,10 +8,10 @@
     />
     <meta
       name="description"
-      content="Agent-assisted landlord listing discovery for StreetEasy rentals."
+      content="Agent-assisted source listing discovery for StreetEasy rentals."
     />
     <meta name="theme-color" content="#1749c6" />
-    <title>First Look - landlord agent</title>
+    <title>First Look - source agent</title>
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -30,7 +30,7 @@
         <span class="brand-mark" aria-hidden="true">FL</span>
         <span>
           <strong>First Look</strong>
-          <small>Landlord agent</small>
+          <small>Source agent</small>
         </span>
       </a>
       <nav class="agent-nav" aria-label="Dashboard navigation">
@@ -41,11 +41,11 @@
     <main class="agent-page">
       <section class="agent-hero" aria-labelledby="agent-title">
         <div>
-          <p class="eyebrow">StreetEasy scout + landlord-site agent</p>
+          <p class="eyebrow">StreetEasy seed + source-site agent</p>
           <h1 id="agent-title">Follow liked rentals back to the source.</h1>
           <p>
-            Scan rentals liked inside First Look, identify each landlord, then
-            check source sites for current availability.
+            Scan rentals liked inside First Look, identify the listing source,
+            then check source sites for current availability.
           </p>
         </div>
         <form class="agent-search" id="agent-form">
@@ -59,7 +59,7 @@
               id="agent-source"
               name="source"
               type="text"
-              value="117 Sullivan Street"
+              placeholder="StreetEasy URL or address"
               autocomplete="off"
             />
             <button class="primary-button" type="submit">Run agent</button>
@@ -85,7 +85,7 @@
             <p class="section-kicker">Source availability</p>
             <h2 id="agent-results-title">
               <span id="agent-result-count">-</span>
-              <span id="agent-result-label">landlord listings</span>
+              <span id="agent-result-label">source listings</span>
             </h2>
           </div>
           <div class="agent-source-links" id="agent-source-links"></div>

@@ -7,13 +7,13 @@ const {
   buildFilterLiteral,
   buildFullDetailsQuery,
   avenueBLongitudeAt,
+  extractOpenAiOutputText,
   latestActiveAt,
   listingDetailsAgentSource,
   matchesLandlordListingCriteria,
+  normalizeExternalAgentResult,
   normalizeLandlordListingForDashboard,
   normalizeUserState,
-  normalizeStreetSlug,
-  parseManhattanSkylineUnits,
   parseSearchParams,
   passesAvenueBBoundary,
   readUserState,
@@ -150,62 +150,43 @@ test("persists saved listing state across reads", (context) => {
   assert.match(stored.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
-test("normalizes a street address into a landlord-site slug", () => {
-  assert.equal(normalizeStreetSlug("117 Sullivan St."), "117-sullivan-street");
-  assert.equal(normalizeStreetSlug("205 E. 66th St"), "205-east-66th-street");
-});
-
-test("normalizes Manhattan Skyline unit feed results", () => {
-  const listings = parseManhattanSkylineUnits(
-    {
-      units: {
-        data: [
+test("extracts text from a Responses API message output", () => {
+  const text = extractOpenAiOutputText({
+    output: [
+      { type: "web_search_call", status: "completed" },
+      {
+        type: "message",
+        content: [
           {
-            number: "3C",
-            slug: "ggtranqx",
-            bedrooms: 1,
-            bathrooms: 1,
-            price: "4495.00",
-            body: "<p>Spacious one-bedroom apartment.</p>",
-            featured: "Yes",
-            videos: "https://vimeo.com/example",
-            url: "https://manhattanskyline.com/buildings/soho/117-sullivan-street/apartment-ggtranqx",
-            building: {
-              name: "117 Sullivan Street",
-              address: {
-                display_name: "Sullivan Mews, New York, NY 10012",
-                latLng: { lat: 40.7260166, lng: -74.0024638 },
-              },
-              neighborhood: { name: "Soho" },
-            },
-            card_images: [
-              {
-                card: "https://manhattanskyline.com/storage/example.jpg",
-              },
-            ],
+            type: "output_text",
+            text: "{\"landlord\":\"Open Market Realty\",\"listings\":[]}",
           },
         ],
       },
-    },
-    "https://manhattanskyline.com/api/units?buildings=117-sullivan-street",
-  );
-
-  assert.equal(listings.length, 1);
-  assert.equal(listings[0].source, "Manhattan Skyline");
-  assert.equal(listings[0].address, "117 Sullivan Street");
-  assert.equal(listings[0].areaName, "Soho");
-  assert.deepEqual(listings[0].geoPoint, {
-    latitude: 40.7260166,
-    longitude: -74.0024638,
+    ],
   });
-  assert.equal(listings[0].unit, "#3C");
-  assert.equal(listings[0].price, 4495);
-  assert.deepEqual(listings[0].facts.slice(0, 2), ["1 bed", "1 bath"]);
-  assert.ok(listings[0].flags.includes("Featured"));
-  assert.equal(listings[0].description, "Spacious one-bedroom apartment.");
+
+  assert.equal(text, "{\"landlord\":\"Open Market Realty\",\"listings\":[]}");
 });
 
-test("filters and normalizes landlord source listings for the main map", () => {
+test("normalizes the generic source-site agent result shape", () => {
+  const result = normalizeExternalAgentResult(
+    {
+      broker: "Open Market Realty",
+      website: "https://example-broker.test",
+      listings: [{ url: "https://example-broker.test/rentals/1" }],
+    },
+    { sourceGroupLabel: "StreetEasy source" },
+  );
+
+  assert.equal(result.landlord, "Open Market Realty");
+  assert.equal(result.website, "https://example-broker.test");
+  assert.equal(result.sourceUrl, "https://example-broker.test");
+  assert.equal(result.listings.length, 1);
+  assert.equal(result.agentSteps[0].agent, "Broker-site agent");
+});
+
+test("filters and normalizes generic source listings for the main map", () => {
   const criteria = parseSearchParams(
     new URLSearchParams({
       areas: "107",
@@ -227,15 +208,17 @@ test("filters and normalizes landlord source listings for the main map", () => {
     geoPoint: { latitude: 40.725, longitude: -74.002 },
   };
   const sourceListing = {
-    source: "Manhattan Skyline",
+    source: "Open Market Realty",
     address: "117 Sullivan Street",
     unit: "#4D",
     price: "4200",
     bedrooms: 1,
     bathrooms: 1,
     squareFeet: 720,
+    latitude: 40.726,
+    longitude: -74.0024,
     availableOn: "2026-08-01",
-    url: "https://manhattanskyline.com/buildings/soho/117-sullivan-street/apartment-4d",
+    url: "https://example-broker.test/rentals/117-sullivan-4d",
   };
 
   assert.equal(
@@ -267,9 +250,12 @@ test("filters and normalizes landlord source listings for the main map", () => {
 
   assert.match(normalized.id, /^broker_[a-f0-9]{18}$/);
   assert.equal(normalized.sourceOrigin, "broker_site");
-  assert.equal(normalized.sourceLabel, "Manhattan Skyline");
+  assert.equal(normalized.sourceLabel, "Open Market Realty");
   assert.equal(normalized.areaName, "Soho");
-  assert.deepEqual(normalized.geoPoint, seed.geoPoint);
+  assert.deepEqual(normalized.geoPoint, {
+    latitude: 40.726,
+    longitude: -74.0024,
+  });
   assert.equal(normalized.price, 4200);
   assert.equal(normalized.bedroomCount, 1);
   assert.equal(normalized.fullBathroomCount, 1);
@@ -278,7 +264,7 @@ test("filters and normalizes landlord source listings for the main map", () => {
   assert.ok(normalized.flags.includes("Assumed off StreetEasy"));
 });
 
-test("builds a landlord-agent source from First Look listing details", () => {
+test("builds a source-agent seed from First Look listing details", () => {
   assert.equal(
     listingDetailsAgentSource({
       property: {

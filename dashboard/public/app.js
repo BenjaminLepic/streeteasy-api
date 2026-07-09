@@ -1476,7 +1476,9 @@ async function scanListings() {
       const count = payload.sourceAgent.matchedListingCount || 0;
       const searched = payload.sourceAgent.searchedSeedCount || 0;
       const failures = payload.sourceAgent.errorCount || 0;
-      if (count) {
+      if (payload.sourceAgent.configurationError) {
+        notices.push(payload.sourceAgent.configurationError);
+      } else if (count) {
         notices.push(
           `Broker-source agents added ${count} matching source-site ${
             count === 1 ? "rental" : "rentals"
@@ -1485,7 +1487,7 @@ async function scanListings() {
       } else {
         notices.push(
           failures
-            ? "Broker-source agents ran, but no supported source-site rentals matched this search."
+            ? "Broker-source agents ran, but no source-site rentals matched this search."
             : "Broker-source agents found no matching source-site rentals.",
         );
       }
