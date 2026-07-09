@@ -153,6 +153,7 @@ const elements = {
   hours: document.querySelector("#hours"),
   hoursOutput: document.querySelector("#hours-output"),
   listingGrid: document.querySelector("#listing-grid"),
+  includeSourceListings: document.querySelector("#include-source-listings"),
   listingDetail: document.querySelector("#listing-detail"),
   listingDetailError: document.querySelector("#listing-detail-error"),
   listingDetailErrorMessage: document.querySelector(
@@ -210,10 +211,13 @@ function updateMobileFilterSummary() {
     minPrice || maxPrice
       ? `${formatFilterPrice(minPrice)}–${formatFilterPrice(maxPrice)}`
       : "Any rent";
+  const sourceSuffix = elements.includeSourceListings?.checked
+    ? " · source sites"
+    : "";
   elements.mobileFilterSummary.textContent =
     `${price} · ${state.selectedAreas.size} ${
       state.selectedAreas.size === 1 ? "area" : "areas"
-    } · ${elements.hours.value}h`;
+    } · ${elements.hours.value}h${sourceSuffix}`;
 }
 
 function setMobileFiltersOpen(open) {
@@ -302,6 +306,9 @@ function buildSearchParams() {
   if (document.querySelector("#pets-allowed").checked) {
     params.set("petsAllowed", "true");
   }
+  if (elements.includeSourceListings.checked) {
+    params.set("includeSourceListings", "true");
+  }
 
   const amenities = formData.getAll("amenity");
   if (amenities.length) params.set("amenities", amenities.join(","));
@@ -321,13 +328,16 @@ function formatAge(hours) {
 }
 
 function bedroomLabel(count) {
+  if (count === null || count === undefined) return null;
   if (count === 0) return "Studio";
   return `${count} bed`;
 }
 
 function bathroomLabel(listing) {
-  const count = listing.fullBathroomCount + listing.halfBathroomCount * 0.5;
-  return `${count} bath`;
+  const count =
+    Number(listing.fullBathroomCount || 0) +
+    Number(listing.halfBathroomCount || 0) * 0.5;
+  return count ? `${count} bath` : null;
 }
 
 function pointInPolygon(point, vertices) {
@@ -1018,6 +1028,8 @@ function createListingCard(listing, index) {
     .cloneNode(true)
     .querySelector(".listing-card");
   card.dataset.listingId = listing.id;
+  const isSourceListing = listing.sourceOrigin === "broker_site";
+  card.classList.toggle("is-source-listing", isSourceListing);
   applyViewedState(card, listing.id);
   applyLikedState(card, listing.id);
   card.querySelector(".listing-index").textContent = String(index + 1).padStart(
@@ -1028,12 +1040,21 @@ function createListingCard(listing, index) {
   const photo = card.querySelector(".listing-photo");
   if (listing.imageUrl) {
     photo.src = listing.imageUrl;
-    photo.alt = `Interior of ${listing.street} ${listing.unit}`;
+    photo.alt = `Interior of ${[listing.street, listing.unit]
+      .filter(Boolean)
+      .join(" ")}`;
   } else {
     card.querySelector(".listing-visual").classList.add("has-no-photo");
     photo.remove();
   }
-  card.querySelector(".listed-age").textContent = formatAge(listing.ageHours);
+  card.querySelector(".listed-age").textContent = isSourceListing
+    ? "Source site"
+    : formatAge(listing.ageHours);
+  const sourceBadge = card.querySelector(".source-badge");
+  if (isSourceListing) {
+    sourceBadge.hidden = false;
+    sourceBadge.textContent = listing.sourceLabel || "Broker source";
+  }
   card.querySelector(".listing-address").textContent =
     `${listing.street} ${listing.unit}`.trim();
   card.querySelector(".listing-area").textContent = listing.areaName;
@@ -1062,6 +1083,7 @@ function createListingCard(listing, index) {
   facts.forEach((fact) => factsContainer.append(makeTextElement("span", fact)));
 
   const flags = [
+    ...(isSourceListing ? listing.flags || [] : []),
     listing.noFee ? "No fee" : null,
     listing.monthsFree ? `${listing.monthsFree} mo. free` : null,
     listing.hasTour3d ? "3D tour" : null,
@@ -1079,12 +1101,19 @@ function createListingCard(listing, index) {
   }
 
   const link = card.querySelector(".listing-link");
-  link.href = listing.streetEasyUrl;
+  link.href = listing.sourceUrl || listing.streetEasyUrl;
+  link.firstChild.textContent = isSourceListing ? "Open source " : "View details ";
   link.setAttribute(
     "aria-label",
-    `View details for ${listing.street} ${listing.unit}`,
+    `${isSourceListing ? "Open source listing for" : "View details for"} ${
+      listing.street
+    } ${listing.unit}`,
   );
   link.addEventListener("click", (event) => {
+    if (isSourceListing) {
+      markListingViewed(listing.id, card);
+      return;
+    }
     event.preventDefault();
     openListingViewer(listing, card);
   });
@@ -1107,6 +1136,7 @@ function createMapMarkerIcon(listing, selected = false) {
   const classes = ["map-price-marker"];
   if (state.viewedListings.has(String(listing.id))) classes.push("is-viewed");
   if (state.likedListings.has(String(listing.id))) classes.push("is-liked");
+  if (listing.sourceOrigin === "broker_site") classes.push("is-source");
   if (selected) classes.push("is-selected");
 
   return window.L.divIcon({
@@ -1198,7 +1228,11 @@ function renderMap(listings) {
       icon: createMapMarkerIcon(listing, state.selectedMapListingId === id),
       keyboard: true,
       riseOnHover: true,
-      title: `${listing.street} ${listing.unit}, ${currency.format(listing.price)}`,
+      title: `${listing.street} ${listing.unit}, ${currency.format(listing.price)}${
+        listing.sourceOrigin === "broker_site"
+          ? `, ${listing.sourceLabel || "broker source"}`
+          : ""
+      }`,
     }).addTo(state.mapLayer);
     marker.on("click", () => selectMapListing(id));
     state.mapMarkers.set(id, marker);
@@ -1364,11 +1398,31 @@ async function scanListings() {
       ? `Cached scan · ${syncedAt}`
       : `Scanned · ${syncedAt}`;
 
+    const notices = [];
+    if (payload.sourceAgent) {
+      const count = payload.sourceAgent.matchedListingCount || 0;
+      const searched = payload.sourceAgent.searchedSeedCount || 0;
+      const failures = payload.sourceAgent.errorCount || 0;
+      if (count) {
+        notices.push(
+          `Broker-source agents added ${count} matching source-site ${
+            count === 1 ? "rental" : "rentals"
+          } from ${searched} StreetEasy ${searched === 1 ? "seed" : "seeds"}.`,
+        );
+      } else {
+        notices.push(
+          failures
+            ? "Broker-source agents ran, but no supported source-site rentals matched this search."
+            : "Broker-source agents found no matching source-site rentals.",
+        );
+      }
+    }
     if (payload.truncated) {
-      showNotice(
+      notices.push(
         "The search hit its safety limit before reaching the end of the selected time window. Narrow the criteria to guarantee a complete result set.",
       );
     }
+    showNotice(notices.join(" "));
   } catch (error) {
     state.listings = [];
     renderListings();

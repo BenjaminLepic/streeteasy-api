@@ -426,6 +426,10 @@ input[type="number"] {
   accent-color: var(--cobalt);
 }
 
+.source-check {
+  margin-top: 12px;
+}
+
 .segmented-control {
   margin-top: 12px;
   display: grid;
@@ -906,6 +910,12 @@ input[type="number"] {
   color: white;
 }
 
+.map-price-marker.is-source {
+  border-color: var(--positive);
+  background: #e5f6ef;
+  color: var(--positive);
+}
+
 .map-price-marker.is-selected {
   border-color: var(--cobalt);
   box-shadow:
@@ -950,6 +960,10 @@ input[type="number"] {
 
 .listing-card.is-liked {
   border-color: #ff9a82;
+}
+
+.listing-card.is-source-listing {
+  border-color: #9ccdbd;
 }
 
 .listing-visual {
@@ -1062,6 +1076,7 @@ input[type="number"] {
 }
 
 .listed-age,
+.source-badge,
 .value-badge,
 .viewed-badge,
 .listing-flags span {
@@ -1079,6 +1094,12 @@ input[type="number"] {
 .value-badge {
   padding: 3px 6px;
   background: #d9f3ea;
+  color: var(--positive);
+}
+
+.source-badge {
+  padding: 3px 6px;
+  background: #e5f6ef;
   color: var(--positive);
 }
 

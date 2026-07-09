@@ -9,6 +9,8 @@ const {
   avenueBLongitudeAt,
   latestActiveAt,
   listingDetailsAgentSource,
+  matchesLandlordListingCriteria,
+  normalizeLandlordListingForDashboard,
   normalizeUserState,
   normalizeStreetSlug,
   parseManhattanSkylineUnits,
@@ -25,6 +27,15 @@ test("parses the default downtown search criteria", () => {
   assert.equal(criteria.areas.length, 12);
   assert.equal(criteria.noFeeOnly, false);
   assert.equal(criteria.avenueBSide, "west");
+  assert.equal(criteria.includeSourceListings, false);
+});
+
+test("parses the broker source scan toggle", () => {
+  const criteria = parseSearchParams(
+    new URLSearchParams({ includeSourceListings: "true" }),
+  );
+
+  assert.equal(criteria.includeSourceListings, true);
 });
 
 test("builds typed GraphQL filters without quoting enum values", () => {
@@ -161,7 +172,11 @@ test("normalizes Manhattan Skyline unit feed results", () => {
             url: "https://manhattanskyline.com/buildings/soho/117-sullivan-street/apartment-ggtranqx",
             building: {
               name: "117 Sullivan Street",
-              address: { display_name: "Sullivan Mews, New York, NY 10012" },
+              address: {
+                display_name: "Sullivan Mews, New York, NY 10012",
+                latLng: { lat: 40.7260166, lng: -74.0024638 },
+              },
+              neighborhood: { name: "Soho" },
             },
             card_images: [
               {
@@ -177,11 +192,90 @@ test("normalizes Manhattan Skyline unit feed results", () => {
 
   assert.equal(listings.length, 1);
   assert.equal(listings[0].source, "Manhattan Skyline");
+  assert.equal(listings[0].address, "117 Sullivan Street");
+  assert.equal(listings[0].areaName, "Soho");
+  assert.deepEqual(listings[0].geoPoint, {
+    latitude: 40.7260166,
+    longitude: -74.0024638,
+  });
   assert.equal(listings[0].unit, "#3C");
   assert.equal(listings[0].price, 4495);
   assert.deepEqual(listings[0].facts.slice(0, 2), ["1 bed", "1 bath"]);
   assert.ok(listings[0].flags.includes("Featured"));
   assert.equal(listings[0].description, "Spacious one-bedroom apartment.");
+});
+
+test("filters and normalizes landlord source listings for the main map", () => {
+  const criteria = parseSearchParams(
+    new URLSearchParams({
+      areas: "107",
+      minPrice: "3000",
+      maxPrice: "4500",
+      minBedrooms: "1",
+    }),
+  );
+  const seed = {
+    id: "5091098",
+    areaName: "Soho",
+    buildingType: "RENTAL",
+    street: "117 Sullivan Street",
+    unit: "#3C",
+    listedAt: "2026-07-09T10:00:00-04:00",
+    ageHours: 2,
+    neighborhoodMedian: 5000,
+    streetEasyUrl: "https://streeteasy.com/rental/5091098",
+    geoPoint: { latitude: 40.725, longitude: -74.002 },
+  };
+  const sourceListing = {
+    source: "Manhattan Skyline",
+    address: "117 Sullivan Street",
+    unit: "#4D",
+    price: "4200",
+    bedrooms: 1,
+    bathrooms: 1,
+    squareFeet: 720,
+    availableOn: "2026-08-01",
+    url: "https://manhattanskyline.com/buildings/soho/117-sullivan-street/apartment-4d",
+  };
+
+  assert.equal(
+    matchesLandlordListingCriteria(sourceListing, seed, criteria),
+    true,
+  );
+  assert.equal(
+    matchesLandlordListingCriteria(
+      { ...sourceListing, price: "5200" },
+      seed,
+      criteria,
+    ),
+    false,
+  );
+  assert.equal(
+    matchesLandlordListingCriteria(
+      { ...sourceListing, areaName: "Upper East Side" },
+      seed,
+      criteria,
+    ),
+    false,
+  );
+
+  const normalized = normalizeLandlordListingForDashboard(
+    sourceListing,
+    seed,
+    criteria,
+  );
+
+  assert.match(normalized.id, /^broker_[a-f0-9]{18}$/);
+  assert.equal(normalized.sourceOrigin, "broker_site");
+  assert.equal(normalized.sourceLabel, "Manhattan Skyline");
+  assert.equal(normalized.areaName, "Soho");
+  assert.deepEqual(normalized.geoPoint, seed.geoPoint);
+  assert.equal(normalized.price, 4200);
+  assert.equal(normalized.bedroomCount, 1);
+  assert.equal(normalized.fullBathroomCount, 1);
+  assert.equal(normalized.availableAt, "2026-08-01");
+  assert.equal(normalized.streetEasyUrl, sourceListing.url);
+  assert.ok(normalized.flags.includes("Assumed off StreetEasy"));
 });
 
 test("builds a landlord-agent source from First Look listing details", () => {

@@ -268,6 +268,18 @@
               />
             </fieldset>
 
+            <fieldset>
+              <legend>Broker sources</legend>
+              <label class="check-control source-check">
+                <input
+                  type="checkbox"
+                  id="include-source-listings"
+                  name="includeSourceListings"
+                />
+                <span>Check broker sites</span>
+              </label>
+            </fieldset>
+
             <button class="primary-button" type="submit">
               <span>Scan new listings</span>
               <span aria-hidden="true">→</span>
@@ -569,6 +581,7 @@
         <div class="listing-main">
           <div class="listing-topline">
             <span class="listed-age"></span>
+            <span class="source-badge" hidden></span>
             <span class="value-badge" hidden></span>
             <span class="viewed-badge" hidden>Viewed</span>
           </div>

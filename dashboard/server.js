@@ -2,6 +2,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  createHash,
   createHmac,
   randomUUID,
   timingSafeEqual,
@@ -41,6 +42,20 @@ const MAX_SEARCH_PAGES = 5;
 const CACHE_TTL_MS = 60_000;
 const LANDLORD_CACHE_TTL_MS = 5 * 60_000;
 const AGENT_REQUEST_TIMEOUT_MS = 20_000;
+const BROKER_AGENT_ENDPOINT = process.env.BROKER_AGENT_ENDPOINT || "";
+const BROKER_AGENT_SECRET = process.env.BROKER_AGENT_SECRET || "";
+const BROKER_SOURCE_AGENT_LIMIT = boundedInteger(
+  process.env.BROKER_SOURCE_AGENT_LIMIT,
+  6,
+  1,
+  25,
+);
+const BROKER_AGENT_REQUEST_TIMEOUT_MS = boundedInteger(
+  process.env.BROKER_AGENT_REQUEST_TIMEOUT_MS,
+  600_000,
+  30_000,
+  900_000,
+);
 const cache = new Map();
 const detailsCache = new Map();
 const landlordAgentCache = new Map();
@@ -78,6 +93,11 @@ class AgentError extends Error {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function boundedInteger(value, fallback, min, max) {
+  const number = Number(value ?? fallback);
+  return Number.isInteger(number) ? clamp(number, min, max) : fallback;
 }
 
 function safeEqual(left, right) {
@@ -287,6 +307,7 @@ function parseSearchParams(params) {
     noFeeOnly: parseBoolean(params, "noFeeOnly"),
     avenueBSide: parseAvenueBSide(params),
     amenities,
+    includeSourceListings: parseBoolean(params, "includeSourceListings"),
   };
 
   if (
@@ -739,11 +760,13 @@ async function findRecentListings(criteria) {
     ...criteria,
     noFeeOnly: false,
     avenueBSide: "any",
+    includeSourceListings: false,
   };
   const cacheKey = JSON.stringify(sourceCriteria);
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.savedAt < CACHE_TTL_MS) {
-    return applyLocalFilters(cached.value, criteria, true);
+    const result = applyLocalFilters(cached.value, criteria, true);
+    return maybeAppendSourceListings(result, criteria);
   }
 
   const now = Date.now();
@@ -803,7 +826,8 @@ async function findRecentListings(criteria) {
   };
 
   cache.set(cacheKey, { savedAt: Date.now(), value: sourceValue });
-  return applyLocalFilters(sourceValue, criteria, false);
+  const result = applyLocalFilters(sourceValue, criteria, false);
+  return maybeAppendSourceListings(result, criteria);
 }
 
 function applyLocalFilters(sourceValue, criteria, cached) {
@@ -816,6 +840,470 @@ function applyLocalFilters(sourceValue, criteria, cached) {
         passesAvenueBBoundary(listing, criteria.avenueBSide),
     ),
     cached,
+  };
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(String(value).replace(/[$,]/g, ""));
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizedSourceText(value = "") {
+  return String(value).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizeAreaName(value = "") {
+  return String(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function sourceListingPrice(listing) {
+  return numberOrNull(
+    listing.price ?? listing.rent ?? listing.monthlyRent ?? listing.monthly_rent,
+  );
+}
+
+function sourceListingBedrooms(listing) {
+  const value =
+    listing.bedrooms ??
+    listing.bedroomCount ??
+    listing.beds ??
+    listing.bed_count;
+  if (typeof value === "string" && /\bstudio\b/i.test(value)) return 0;
+  return numberOrNull(value);
+}
+
+function sourceListingBathrooms(listing) {
+  return numberOrNull(
+    listing.bathrooms ??
+      listing.bathroomCount ??
+      listing.baths ??
+      listing.bath_count,
+  );
+}
+
+function sourceListingNoFee(listing) {
+  if (typeof listing.noFee === "boolean") return listing.noFee;
+  const text = normalizedSourceText(
+    [
+      listing.fee,
+      listing.description,
+      ...(Array.isArray(listing.flags) ? listing.flags : []),
+      ...(Array.isArray(listing.facts) ? listing.facts : []),
+    ].join(" "),
+  );
+  return /\bno fee\b|\bno-fee\b/.test(text);
+}
+
+function normalizeAvailableDate(value) {
+  if (!value) return null;
+  const input = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+  const parsed = Date.parse(input);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : null;
+}
+
+function splitBathroomCount(value) {
+  const bathrooms = numberOrNull(value);
+  if (bathrooms === null) {
+    return { fullBathroomCount: 0, halfBathroomCount: 0 };
+  }
+  return {
+    fullBathroomCount: Math.floor(bathrooms),
+    halfBathroomCount: bathrooms % 1 >= 0.5 ? 1 : 0,
+  };
+}
+
+function stableSourceListingId(listing, seed) {
+  const key = [
+    listing.url,
+    listing.id,
+    listing.sourceUrl,
+    listing.building,
+    listing.address,
+    listing.unit,
+    listing.price,
+    seed?.id,
+  ]
+    .filter(Boolean)
+    .join("|");
+  return `broker_${createHash("sha256")
+    .update(key || randomUUID())
+    .digest("hex")
+    .slice(0, 18)}`;
+}
+
+function sourceListingKey(listing, normalized) {
+  return (
+    listing.url ||
+    listing.sourceUrl ||
+    listing.id ||
+    `${normalized.sourceLabel}|${normalized.street}|${normalized.unit}|${normalized.price}`
+  );
+}
+
+function matchesLandlordListingCriteria(listing, seed, criteria) {
+  const price = sourceListingPrice(listing);
+  if (!Number.isFinite(price)) return false;
+  if (criteria.minPrice !== null && price < criteria.minPrice) return false;
+  if (criteria.maxPrice !== null && price > criteria.maxPrice) return false;
+
+  const areaCode = numberOrNull(listing.areaCode ?? listing.area?.id);
+  if (areaCode !== null && !criteria.areas.includes(areaCode)) return false;
+  if (
+    listing.areaName &&
+    seed?.areaName &&
+    normalizeAreaName(listing.areaName) !== normalizeAreaName(seed.areaName)
+  ) {
+    return false;
+  }
+  if (!seed?.areaName && !listing.areaName && areaCode === null) return false;
+
+  const bedrooms = sourceListingBedrooms(listing);
+  if (criteria.minBedrooms !== null && bedrooms !== null && bedrooms < criteria.minBedrooms) {
+    return false;
+  }
+  if (criteria.maxBedrooms !== null && bedrooms !== null && bedrooms > criteria.maxBedrooms) {
+    return false;
+  }
+
+  const bathrooms = sourceListingBathrooms(listing);
+  if (criteria.minBathrooms !== null && bathrooms !== null && bathrooms < criteria.minBathrooms) {
+    return false;
+  }
+  return true;
+}
+
+function displayStreetForSourceListing(listing, seed) {
+  return (
+    listing.street ||
+    parseStreetAddressFromInput(listing.address || "") ||
+    parseStreetAddressFromInput(listing.building || "") ||
+    listing.address ||
+    listing.building ||
+    seed?.street ||
+    "Broker source listing"
+  );
+}
+
+function normalizeSourceUnit(listing) {
+  if (listing.unit) return String(listing.unit);
+  if (listing.number) {
+    const number = String(listing.number).trim();
+    return number.startsWith("#") ? number : `#${number}`;
+  }
+  return "";
+}
+
+function normalizeLandlordListingForDashboard(listing, seed, criteria) {
+  if (!matchesLandlordListingCriteria(listing, seed, criteria)) return null;
+
+  const price = sourceListingPrice(listing);
+  const bedroomCount = sourceListingBedrooms(listing);
+  const bathrooms = sourceListingBathrooms(listing);
+  const { fullBathroomCount, halfBathroomCount } = splitBathroomCount(bathrooms);
+  const sourceLabel =
+    listing.landlord ||
+    listing.source ||
+    listing.broker ||
+    listing.brokerage ||
+    "Broker site";
+  const sourceUrl = listing.url || listing.sourceUrl || null;
+  const noFee = sourceListingNoFee(listing);
+  const neighborhoodMedian = seed?.neighborhoodMedian ?? null;
+  const percentBelowMedian =
+    neighborhoodMedian && price
+      ? Math.round(((neighborhoodMedian - price) / neighborhoodMedian) * 100)
+      : null;
+  const valueScore = Math.round(
+    clamp(percentBelowMedian ?? 0, -20, 30) * 2 +
+      (noFee ? 14 : 0) +
+      (numberOrNull(listing.squareFeet ?? listing.square_footage) ? 4 : 0),
+  );
+
+  return {
+    id: stableSourceListingId(listing, seed),
+    sourceOrigin: "broker_site",
+    sourceLabel,
+    sourceUrl,
+    sourceMatchBasis: listing.areaName ? "agent_area" : "streeteasy_seed_area",
+    seedListingId: seed?.id ? String(seed.id) : null,
+    seedStreetEasyUrl: seed?.streetEasyUrl || null,
+    areaName: listing.areaName || seed?.areaName || "Matched area",
+    availableAt:
+      normalizeAvailableDate(listing.availableOn) ||
+      normalizeAvailableDate(listing.availableAt),
+    bedroomCount,
+    buildingType: seed?.buildingType || "RENTAL",
+    fullBathroomCount,
+    halfBathroomCount,
+    furnished: Boolean(listing.furnished),
+    geoPoint: listing.geoPoint || seed?.geoPoint || null,
+    hasTour3d: Boolean(listing.tour3dUrl || listing.three_d_tour_url),
+    hasVideos: Boolean(listing.videoUrl || listing.videos),
+    isNewDevelopment: Boolean(listing.isNewDevelopment),
+    leaseTermMonths: numberOrNull(listing.leaseTermMonths),
+    livingAreaSize: numberOrNull(listing.squareFeet ?? listing.square_footage),
+    mediaAssetCount: listing.imageUrl ? 1 : 0,
+    monthsFree: numberOrNull(listing.monthsFree ?? listing.concession_months_free),
+    noFee,
+    netEffectivePrice: numberOrNull(listing.netEffectivePrice),
+    price,
+    sourceGroupLabel: sourceLabel,
+    status: "ACTIVE",
+    street: displayStreetForSourceListing(listing, seed),
+    unit: normalizeSourceUnit(listing),
+    urlPath: sourceUrl,
+    listedAt: seed?.listedAt || new Date().toISOString(),
+    createdAt: null,
+    ageHours: Number.isFinite(seed?.ageHours) ? seed.ageHours : 0,
+    neighborhoodMedian,
+    percentBelowMedian,
+    valueScore,
+    windowHours: criteria.hours,
+    streetEasyUrl: sourceUrl || seed?.streetEasyUrl || "",
+    imageUrl: listing.imageUrl || null,
+    flags: uniqueValues([
+      ...(Array.isArray(listing.flags) ? listing.flags : []),
+      "Broker source",
+      "Assumed off StreetEasy",
+    ]),
+  };
+}
+
+function brokerAgentSeedPayload(seed) {
+  return {
+    id: seed.id,
+    streetEasyUrl: seed.streetEasyUrl,
+    address: [seed.street, seed.unit].filter(Boolean).join(" "),
+    areaName: seed.areaName,
+    price: seed.price,
+    bedrooms: seed.bedroomCount,
+    bathrooms:
+      Number(seed.fullBathroomCount || 0) +
+      Number(seed.halfBathroomCount || 0) * 0.5,
+    geoPoint: seed.geoPoint || null,
+    sourceGroupLabel: seed.sourceGroupLabel || null,
+  };
+}
+
+function brokerAgentCriteriaPayload(criteria) {
+  return {
+    areas: criteria.areas,
+    hours: criteria.hours,
+    minPrice: criteria.minPrice,
+    maxPrice: criteria.maxPrice,
+    minBedrooms: criteria.minBedrooms,
+    maxBedrooms: criteria.maxBedrooms,
+    minBathrooms: criteria.minBathrooms,
+  };
+}
+
+function normalizeExternalAgentResult(payload, seed) {
+  return {
+    landlord:
+      payload.landlord ||
+      payload.broker ||
+      payload.source ||
+      seed.sourceGroupLabel ||
+      "Broker agent",
+    website: payload.website || null,
+    buildingUrl: payload.buildingUrl || null,
+    sourceUrl: payload.sourceUrl || payload.website || null,
+    listings: Array.isArray(payload.listings) ? payload.listings : [],
+    agentSteps: Array.isArray(payload.agentSteps)
+      ? payload.agentSteps
+      : Array.isArray(payload.steps)
+        ? payload.steps
+        : [
+            {
+              agent: "Broker-site agent",
+              status: "complete",
+              detail: "The configured broker agent returned structured listings.",
+              url: payload.sourceUrl || payload.website || null,
+            },
+          ],
+  };
+}
+
+async function runExternalBrokerAgent(seed, criteria) {
+  if (!BROKER_AGENT_ENDPOINT) {
+    throw new AgentError("No generic broker-site agent endpoint is configured.", 422);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    BROKER_AGENT_REQUEST_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(BROKER_AGENT_ENDPOINT, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...(BROKER_AGENT_SECRET
+          ? { "X-First-Look-Agent-Secret": BROKER_AGENT_SECRET }
+          : {}),
+      },
+      body: JSON.stringify({
+        version: "first-look-broker-agent-v1",
+        task:
+          "Find the broker or landlord website for this fresh StreetEasy rental, traverse the site, and return active rentals that match the supplied price and area criteria. Assume returned source-site units are not on StreetEasy.",
+        seedListing: brokerAgentSeedPayload(seed),
+        criteria: brokerAgentCriteriaPayload(criteria),
+        requiredListingFields: [
+          "url",
+          "price",
+          "areaName",
+          "address",
+          "unit",
+          "bedrooms",
+          "bathrooms",
+          "imageUrl",
+          "availableOn",
+        ],
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload) {
+      throw new AgentError(
+        payload?.error ||
+          `The configured broker agent returned HTTP ${response.status}.`,
+        response.status >= 500 ? 502 : response.status,
+      );
+    }
+    return normalizeExternalAgentResult(payload, seed);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new AgentError("The configured broker agent did not finish in time.", 504);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runBrokerSourceAgentForSeed(seed, criteria) {
+  try {
+    const builtInResult = await findLandlordListings(
+      seed.streetEasyUrl || `${seed.street} ${seed.unit}`,
+    );
+    if (/manhattan\s+skyline/i.test(builtInResult.landlord || "")) {
+      try {
+        return await runManhattanSkylinePortfolioAgent(seed, builtInResult);
+      } catch {
+        return builtInResult;
+      }
+    }
+    return builtInResult;
+  } catch (builtInError) {
+    if (!BROKER_AGENT_ENDPOINT) throw builtInError;
+    try {
+      return await runExternalBrokerAgent(seed, criteria);
+    } catch (externalError) {
+      const builtInMessage =
+        builtInError instanceof Error
+          ? builtInError.message
+          : "The built-in source agent did not complete.";
+      const externalMessage =
+        externalError instanceof Error
+          ? externalError.message
+          : "The configured broker agent did not complete.";
+      throw new AgentError(`${builtInMessage} ${externalMessage}`, 422);
+    }
+  }
+}
+
+async function findBrokerSourceListingsForRecentListings(seeds, criteria) {
+  const selectedSeeds = seeds
+    .filter((listing) => listing.streetEasyUrl || listing.street)
+    .slice(0, BROKER_SOURCE_AGENT_LIMIT);
+  const seen = new Set();
+  const listings = [];
+  const sources = [];
+
+  for (const seed of selectedSeeds) {
+    try {
+      const result = await runBrokerSourceAgentForSeed(seed, criteria);
+      let matchedCount = 0;
+      (result.listings || []).forEach((sourceListing) => {
+        const normalized = normalizeLandlordListingForDashboard(
+          {
+            ...sourceListing,
+            landlord: sourceListing.landlord || result.landlord,
+            source: sourceListing.source || result.landlord,
+          },
+          seed,
+          criteria,
+        );
+        if (!normalized) return;
+        const key = sourceListingKey(sourceListing, normalized);
+        if (seen.has(key)) return;
+        seen.add(key);
+        matchedCount += 1;
+        listings.push(normalized);
+      });
+      sources.push({
+        seedListingId: String(seed.id),
+        seedAddress: [seed.street, seed.unit].filter(Boolean).join(" "),
+        ok: true,
+        landlord: result.landlord,
+        website: result.website || null,
+        sourceUrl: result.sourceUrl || null,
+        foundCount: (result.listings || []).length,
+        matchedCount,
+        agentSteps: result.agentSteps || [],
+      });
+    } catch (error) {
+      sources.push({
+        seedListingId: String(seed.id),
+        seedAddress: [seed.street, seed.unit].filter(Boolean).join(" "),
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "The broker-site agent could not complete this seed listing.",
+      });
+    }
+  }
+
+  return {
+    enabled: true,
+    generatedAt: new Date().toISOString(),
+    configuredGenericAgent: Boolean(BROKER_AGENT_ENDPOINT),
+    seedLimit: BROKER_SOURCE_AGENT_LIMIT,
+    searchedSeedCount: selectedSeeds.length,
+    successCount: sources.filter((source) => source.ok).length,
+    errorCount: sources.filter((source) => !source.ok).length,
+    matchedListingCount: listings.length,
+    sources,
+    listings,
+  };
+}
+
+async function maybeAppendSourceListings(result, criteria) {
+  if (!criteria.includeSourceListings) return result;
+
+  const sourceAgent = await findBrokerSourceListingsForRecentListings(
+    result.listings,
+    criteria,
+  );
+  const { listings: sourceListings, ...summary } = sourceAgent;
+  return {
+    ...result,
+    listings: [...result.listings, ...sourceListings].sort(
+      (left, right) =>
+        Date.parse(right.listedAt || right.generatedAt || 0) -
+        Date.parse(left.listedAt || left.generatedAt || 0),
+    ),
+    sourceAgent: summary,
   };
 }
 
@@ -1081,6 +1569,7 @@ function normalizeManhattanSkylineUnit(unit, building, sourceUrl) {
     null;
   const availableOn = unit.available_on || unit.availableOn || null;
   const price = Number(unit.price);
+  const latLng = building?.address?.latLng;
   const facts = uniqueValues([
     unit.bedrooms === 0
       ? "Studio"
@@ -1099,10 +1588,18 @@ function normalizeManhattanSkylineUnit(unit, building, sourceUrl) {
     source: "Manhattan Skyline",
     building: building?.name || building?.display_name || "Manhattan Skyline building",
     address:
+      building?.name ||
       building?.address?.display_name ||
       building?.address?.street ||
-      building?.name ||
       null,
+    areaName: building?.neighborhood?.name || null,
+    geoPoint:
+      Number.isFinite(Number(latLng?.lat)) && Number.isFinite(Number(latLng?.lng))
+        ? {
+            latitude: Number(latLng.lat),
+            longitude: Number(latLng.lng),
+          }
+        : null,
     unit: unit.number ? `#${unit.number}` : null,
     price: Number.isFinite(price) ? price : null,
     bedrooms: unit.bedrooms ?? null,
@@ -1129,6 +1626,42 @@ function parseManhattanSkylineUnits(payload, sourceUrl) {
   return data
     .map((unit) => normalizeManhattanSkylineUnit(unit, unit.building, sourceUrl))
     .filter((listing) => listing.url || listing.unit || listing.price);
+}
+
+function manhattanSkylineNeighborhoodSlug(areaName) {
+  const normalized = normalizeStreetSlug(areaName || "");
+  if (!normalized) return null;
+  if (normalized === "soho") return "soho";
+  return normalized;
+}
+
+async function runManhattanSkylinePortfolioAgent(seed, fallbackResult = null) {
+  const neighborhoodSlug = manhattanSkylineNeighborhoodSlug(seed.areaName);
+  const apiUrl = neighborhoodSlug
+    ? `https://manhattanskyline.com/api/units?neighborhoods=${encodeURIComponent(
+        neighborhoodSlug,
+      )}`
+    : "https://manhattanskyline.com/api/units";
+  const payload = await fetchAgentJson(apiUrl);
+  const listings = parseManhattanSkylineUnits(payload, apiUrl);
+  return {
+    website: "https://manhattanskyline.com",
+    sourceUrl: apiUrl,
+    buildingUrl: fallbackResult?.buildingUrl || "https://manhattanskyline.com/apartments",
+    landlord: "Manhattan Skyline",
+    listings,
+    agentSteps: [
+      ...(fallbackResult?.agentSteps || []),
+      {
+        agent: "Landlord site agent",
+        status: "complete",
+        detail: neighborhoodSlug
+          ? `Loaded Manhattan Skyline's public unit feed for ${seed.areaName}.`
+          : "Loaded Manhattan Skyline's public portfolio unit feed.",
+        url: apiUrl,
+      },
+    ],
+  };
 }
 
 async function runManhattanSkylineAgent(context, input) {
@@ -1587,6 +2120,8 @@ module.exports = {
   avenueBLongitudeAt,
   latestActiveAt,
   listingDetailsAgentSource,
+  matchesLandlordListingCriteria,
+  normalizeLandlordListingForDashboard,
   normalizeStreetSlug,
   parseManhattanSkylineUnits,
   parseSearchParams,
