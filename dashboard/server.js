@@ -1358,10 +1358,13 @@ function createServer() {
       return;
     }
 
+    const protectedDashboardPage = ["/", "/index.html"].includes(url.pathname);
+    const protectedApi =
+      url.pathname.startsWith("/api/") &&
+      url.pathname !== "/api/landlord-listings";
     if (
       AUTH_ENABLED &&
-      (["/", "/index.html", "/landlord", "/landlord.html"].includes(url.pathname) ||
-        url.pathname.startsWith("/api/")) &&
+      (protectedDashboardPage || protectedApi) &&
       !hasValidSession(request)
     ) {
       if (url.pathname.startsWith("/api/")) {
