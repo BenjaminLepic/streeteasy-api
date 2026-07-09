@@ -12,7 +12,8 @@ const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD || "";
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || "";
-const AUTH_ENABLED = Boolean(ACCESS_PASSWORD || ACCESS_TOKEN);
+const AUTH_ENABLED =
+  process.env.AUTH_ENABLED === "true" && Boolean(ACCESS_PASSWORD || ACCESS_TOKEN);
 const AUTH_SECRET =
   process.env.AUTH_SECRET || ACCESS_PASSWORD || ACCESS_TOKEN;
 const PUBLIC_DIR = path.join(__dirname, "public");
