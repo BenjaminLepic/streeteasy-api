@@ -42,24 +42,27 @@
       <section class="agent-hero" aria-labelledby="agent-title">
         <div>
           <p class="eyebrow">StreetEasy scout + landlord-site agent</p>
-          <h1 id="agent-title">Follow the listing back to the source.</h1>
+          <h1 id="agent-title">Follow saved listings back to the source.</h1>
           <p>
-            Paste a StreetEasy listing URL or address. The scout identifies the
-            landlord, then the source agent checks the landlord site for current
+            Paste one StreetEasy listing or a batch of saved listing links. The
+            scout identifies each landlord, then checks source sites for current
             availability.
           </p>
         </div>
         <form class="agent-search" id="agent-form">
-          <label for="agent-source">StreetEasy listing or address</label>
-          <div class="agent-search-row">
-            <input
-              id="agent-source"
-              name="source"
-              type="text"
-              value="117 Sullivan Street"
-              autocomplete="off"
-            />
-            <button class="primary-button" type="submit">Run agent</button>
+          <label for="agent-source">StreetEasy listings or addresses</label>
+          <textarea
+            id="agent-source"
+            name="source"
+            autocomplete="off"
+          >117 Sullivan Street</textarea>
+          <div class="agent-search-actions">
+            <a
+              href="https://streeteasy.com/account/saved/rentals"
+              target="_blank"
+              rel="noopener noreferrer"
+            >Open saved rentals</a>
+            <button class="primary-button" type="submit">Scan sources</button>
           </div>
         </form>
       </section>
@@ -94,7 +97,7 @@
           <div class="empty-state">
             <span class="empty-mark" aria-hidden="true">AI</span>
             <h3>Ready to launch</h3>
-            <p>Start with 117 Sullivan Street or paste another listing.</p>
+            <p>Start with 117 Sullivan Street or paste saved listing links.</p>
           </div>
         </div>
       </section>

@@ -1765,18 +1765,38 @@ body.viewer-open {
   text-transform: uppercase;
 }
 
-.agent-search-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+.agent-search textarea {
+  width: 100%;
+  min-height: 132px;
+  min-width: 0;
+  padding: 13px 14px;
+  resize: vertical;
+  border: 1px solid var(--line-dark);
+  background: #f8f9fb;
+}
+
+.agent-search-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.agent-search input {
+.agent-search-actions a {
   min-height: 52px;
-  min-width: 0;
-  padding: 0 14px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
   border: 1px solid var(--line-dark);
-  background: #f8f9fb;
+  color: var(--cobalt);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
 }
 
 .agent-status-panel {
@@ -2386,7 +2406,8 @@ body.viewer-open {
     padding: 18px;
   }
 
-  .agent-search-row {
+  .agent-search-actions {
+    display: grid;
     grid-template-columns: 1fr;
   }
 

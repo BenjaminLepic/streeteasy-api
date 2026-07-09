@@ -74,21 +74,25 @@ function renderSteps(steps = []) {
   });
 }
 
-function renderSummary(payload) {
+function renderSummaryItems(items) {
   elements.summary.hidden = false;
   elements.summary.replaceChildren();
-
-  const items = [
-    ["Landlord", payload.landlord],
-    ["Address", payload.address],
-    ["Generated", new Date(payload.generatedAt).toLocaleString()],
-  ].filter(([, value]) => value);
 
   items.forEach(([label, value]) => {
     const row = document.createElement("p");
     row.append(makeTextElement("span", label), makeTextElement("strong", value));
     elements.summary.append(row);
   });
+}
+
+function renderSummary(payload) {
+  renderSummaryItems(
+    [
+      ["Landlord", payload.landlord],
+      ["Address", payload.address],
+      ["Generated", new Date(payload.generatedAt).toLocaleString()],
+    ].filter(([, value]) => value),
+  );
 
   elements.sourceLinks.replaceChildren();
   if (payload.streetEasyUrl) {
@@ -100,6 +104,15 @@ function renderSummary(payload) {
   if (payload.sourceUrl) {
     elements.sourceLinks.append(makeLink("Unit feed", payload.sourceUrl));
   }
+}
+
+function renderBatchSummary(payload) {
+  renderSummaryItems([
+    ["Inputs", String(payload.sourceCount || 0)],
+    ["Resolved", String(payload.successCount || 0)],
+    ["Generated", new Date(payload.generatedAt).toLocaleString()],
+  ]);
+  elements.sourceLinks.replaceChildren();
 }
 
 function formatPrice(price) {
@@ -132,7 +145,7 @@ function renderListing(listing, index) {
   main.append(
     makeTextElement(
       "p",
-      [listing.source, listing.address].filter(Boolean).join(" / "),
+      [listing.landlord || listing.source, listing.address].filter(Boolean).join(" / "),
       "section-kicker",
     ),
     makeTextElement(
@@ -163,6 +176,7 @@ function renderListing(listing, index) {
   const actions = document.createElement("div");
   actions.className = "agent-listing-actions";
   if (listing.url) actions.append(makeLink("Open listing", listing.url));
+  if (listing.streetEasyUrl) actions.append(makeLink("StreetEasy", listing.streetEasyUrl));
 
   article.append(visual, main, actions);
   return article;
@@ -190,6 +204,42 @@ function renderPayload(payload) {
   });
 }
 
+function renderBatchPayload(payload) {
+  const listings = payload.listings || [];
+  elements.resultCount.textContent = String(listings.length);
+  elements.resultLabel.textContent =
+    listings.length === 1 ? "landlord listing" : "landlord listings";
+  renderBatchSummary(payload);
+  renderSteps(
+    (payload.sources || []).map((item) => ({
+      agent: item.ok ? item.result.landlord : "Listing scout",
+      status: item.ok ? "complete" : "partial",
+      detail: item.ok
+        ? `${item.result.listings.length} source listing${
+            item.result.listings.length === 1 ? "" : "s"
+          } found for ${item.source}`
+        : `${item.source}: ${item.error}`,
+      url: item.ok ? item.result.streetEasyUrl : null,
+    })),
+  );
+
+  elements.listingGrid.replaceChildren();
+  if (!listings.length) {
+    elements.listingGrid.append(
+      emptyState(
+        "No source listings found",
+        payload.errorCount
+          ? "The scan ran, but none of the resolved landlords returned active units."
+          : "The landlords were identified, but no active units were returned by source sites.",
+      ),
+    );
+    return;
+  }
+  listings.forEach((listing, index) => {
+    elements.listingGrid.append(renderListing(listing, index));
+  });
+}
+
 async function runAgent(event) {
   event.preventDefault();
   const source = elements.source.value.trim();
@@ -201,22 +251,22 @@ async function runAgent(event) {
   setLoading(true);
   showNotice();
   try {
-    const response = await fetch(
-      `/api/landlord-listings?source=${encodeURIComponent(source)}`,
-    );
+    const response = await fetch("/api/landlord-listings/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sources: source }),
+    });
     const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.error || "The landlord agent could not finish.");
     }
-    renderPayload(payload);
+    renderBatchPayload(payload);
     const generatedAt = new Date(payload.generatedAt).toLocaleTimeString(
       "en-US",
       { hour: "numeric", minute: "2-digit" },
     );
     elements.sync.classList.add("is-live");
-    elements.syncLabel.textContent = payload.cached
-      ? `Cached result / ${generatedAt}`
-      : `Agent complete / ${generatedAt}`;
+    elements.syncLabel.textContent = `Scanned ${payload.sourceCount} / ${generatedAt}`;
   } catch (error) {
     elements.resultCount.textContent = "0";
     elements.resultLabel.textContent = "landlord listings";
