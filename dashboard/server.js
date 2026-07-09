@@ -39,8 +39,11 @@ const ALLOWED_AMENITIES = new Set([
 const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_PAGES = 5;
 const CACHE_TTL_MS = 60_000;
+const LANDLORD_CACHE_TTL_MS = 5 * 60_000;
+const AGENT_REQUEST_TIMEOUT_MS = 20_000;
 const cache = new Map();
 const detailsCache = new Map();
+const landlordAgentCache = new Map();
 
 // Avenue B centerline, south to north, derived from OpenStreetMap road geometry.
 // A small tolerance keeps buildings whose map pin falls just off the centerline
@@ -61,6 +64,14 @@ class UpstreamError extends Error {
   constructor(message, status = 502) {
     super(message);
     this.name = "UpstreamError";
+    this.status = status;
+  }
+}
+
+class AgentError extends Error {
+  constructor(message, status = 502) {
+    super(message);
+    this.name = "AgentError";
     this.status = status;
   }
 }
@@ -808,6 +819,427 @@ function applyLocalFilters(sourceValue, criteria, cached) {
   };
 }
 
+function decodeHtml(value = "") {
+  return String(value)
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
+}
+
+function stripHtml(value = "") {
+  return decodeHtml(
+    String(value)
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function uniqueValues(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function makeAbsoluteUrl(value, baseUrl) {
+  try {
+    return new URL(value, baseUrl).href;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStreetSlug(value = "") {
+  const normalized = String(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/#/g, " ")
+    .replace(/\b(street|st)\b/g, "street")
+    .replace(/\b(avenue|ave)\b/g, "avenue")
+    .replace(/\b(east|e)\b/g, "east")
+    .replace(/\b(west|w)\b/g, "west")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return normalized || null;
+}
+
+function parseStreetAddressFromInput(value = "") {
+  const input = String(value);
+  const match = input.match(
+    /\b(\d{1,5})\s+([A-Za-z][A-Za-z\s'.-]*?)\s+(street|st|avenue|ave|road|rd|place|pl|boulevard|blvd)\b/i,
+  );
+  if (!match) return null;
+  return `${match[1]} ${match[2].trim()} ${match[3]}`;
+}
+
+function parseStreetAddressFromSlug(value = "") {
+  const source = String(value)
+    .toLowerCase()
+    .replace(/[_-]new[_-]york.*/i, "")
+    .replace(/[_-]+/g, " ");
+  return parseStreetAddressFromInput(source);
+}
+
+function streetEasyUrlFromInput(value = "") {
+  const input = String(value).trim();
+  try {
+    const url = new URL(input);
+    if (url.hostname.endsWith("streeteasy.com")) return url.href;
+  } catch {
+    // Plain-text search input is allowed.
+  }
+
+  const urlMatch = input.match(/https?:\/\/(?:www\.)?streeteasy\.com\/[^\s]+/i);
+  return urlMatch ? urlMatch[0] : null;
+}
+
+function inferKnownStreetEasyUrl(input = "") {
+  const source = String(input).toLowerCase();
+  if (/\b117\s+sullivan\b/.test(source)) {
+    return "https://streeteasy.com/building/117-sullivan-street-new_york/302";
+  }
+  return null;
+}
+
+async function fetchAgentText(url, { accept = "text/html,*/*" } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: accept,
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://streeteasy.com/",
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+      },
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new AgentError(
+        `${new URL(url).hostname} returned HTTP ${response.status}.`,
+        response.status >= 500 ? 502 : response.status,
+      );
+    }
+    return text;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new AgentError(`${new URL(url).hostname} did not respond in time.`, 504);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchAgentJson(url) {
+  const text = await fetchAgentText(url, { accept: "application/json,*/*" });
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new AgentError(`${new URL(url).hostname} returned invalid JSON.`);
+  }
+}
+
+function extractPageTitle(html = "") {
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  return title ? stripHtml(title) : null;
+}
+
+function extractMetaContent(html = "", name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regexes = [
+    new RegExp(
+      `<meta[^>]+(?:name|property)=["']${escapedName}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+      "i",
+    ),
+    new RegExp(
+      `<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']${escapedName}["'][^>]*>`,
+      "i",
+    ),
+  ];
+  const match = regexes.map((regex) => html.match(regex)).find(Boolean);
+  return match ? decodeHtml(match[1]).trim() : null;
+}
+
+function extractStreetEasyContext(input, html = "") {
+  const text = stripHtml(html);
+  const title = extractPageTitle(html);
+  const description = extractMetaContent(html, "description");
+  const address =
+    parseStreetAddressFromInput(`${title || ""} ${description || ""}`) ||
+    parseStreetAddressFromInput(text) ||
+    parseStreetAddressFromSlug(input) ||
+    parseStreetAddressFromInput(input);
+  const landlord = /manhattan\s+skyline/i.test(`${html} ${input}`)
+    ? "Manhattan Skyline"
+    : null;
+
+  return {
+    address,
+    title,
+    description,
+    landlord,
+    streetEasyUrl: streetEasyUrlFromInput(input) || inferKnownStreetEasyUrl(input),
+  };
+}
+
+function inferLandlordFromContext(context, input = "") {
+  if (context.landlord) return context.landlord;
+
+  const source = `${context.address || ""} ${context.title || ""} ${
+    context.description || ""
+  } ${input}`;
+  const searchableSource = source.replace(/[_-]+/g, " ");
+  if (/\b(10[7-9]|11[13579])\s+sullivan\b/i.test(searchableSource)) {
+    return "Manhattan Skyline";
+  }
+  if (/\b117\s+sullivan\b/i.test(searchableSource)) return "Manhattan Skyline";
+  return null;
+}
+
+function buildingSlugFromContext(context, input = "") {
+  const address =
+    context.address ||
+    parseStreetAddressFromSlug(context.streetEasyUrl || "") ||
+    parseStreetAddressFromInput(context.streetEasyUrl || "") ||
+    parseStreetAddressFromSlug(input) ||
+    parseStreetAddressFromInput(input);
+  if (address) return normalizeStreetSlug(address);
+
+  const url = context.streetEasyUrl || input;
+  const match = String(url).match(/\/building\/([^/_?#]+(?:-[^/_?#]+)*)/i);
+  return match ? match[1].replace(/-new-york$/i, "") : null;
+}
+
+async function runStreetEasyScoutAgent(input) {
+  const streetEasyUrl = streetEasyUrlFromInput(input) || inferKnownStreetEasyUrl(input);
+  if (!streetEasyUrl) {
+    const context = extractStreetEasyContext(input);
+    return {
+      ...context,
+      landlord: inferLandlordFromContext(context, input),
+      steps: [
+        {
+          agent: "StreetEasy scout",
+          status: "skipped",
+          detail: "No StreetEasy URL was supplied, so the scout used the typed address.",
+        },
+      ],
+    };
+  }
+
+  try {
+    const html = await fetchAgentText(streetEasyUrl);
+    const context = extractStreetEasyContext(streetEasyUrl, html);
+    return {
+      ...context,
+      streetEasyUrl,
+      landlord: inferLandlordFromContext(context, input),
+      steps: [
+        {
+          agent: "StreetEasy scout",
+          status: "complete",
+          detail: "Fetched the StreetEasy listing page and extracted address/landlord hints.",
+          url: streetEasyUrl,
+        },
+      ],
+    };
+  } catch (error) {
+    const context = extractStreetEasyContext(input);
+    return {
+      ...context,
+      streetEasyUrl,
+      landlord: inferLandlordFromContext(context, input),
+      steps: [
+        {
+          agent: "StreetEasy scout",
+          status: "partial",
+          detail:
+            error instanceof Error
+              ? error.message
+              : "StreetEasy could not be fetched; using typed context.",
+          url: streetEasyUrl,
+        },
+      ],
+    };
+  }
+}
+
+function normalizeManhattanSkylineUnit(unit, building, sourceUrl) {
+  const image =
+    unit.card_images?.find((item) => item.card || item.src) ||
+    unit.images?.find((item) => item.card || item.src) ||
+    null;
+  const availableOn = unit.available_on || unit.availableOn || null;
+  const price = Number(unit.price);
+  const facts = uniqueValues([
+    unit.bedrooms === 0
+      ? "Studio"
+      : Number.isFinite(Number(unit.bedrooms))
+        ? `${Number(unit.bedrooms)} bed`
+        : null,
+    Number.isFinite(Number(unit.bathrooms))
+      ? `${Number(unit.bathrooms)} bath`
+      : null,
+    unit.square_footage ? `${Number(unit.square_footage).toLocaleString()} sqft` : null,
+    availableOn ? `Available ${availableOn}` : "Available now",
+  ]);
+
+  return {
+    id: `manhattan-skyline:${unit.slug || unit.number || unit.url}`,
+    source: "Manhattan Skyline",
+    building: building?.name || building?.display_name || "Manhattan Skyline building",
+    address:
+      building?.address?.display_name ||
+      building?.address?.street ||
+      building?.name ||
+      null,
+    unit: unit.number ? `#${unit.number}` : null,
+    price: Number.isFinite(price) ? price : null,
+    bedrooms: unit.bedrooms ?? null,
+    bathrooms: unit.bathrooms ?? null,
+    squareFeet: unit.square_footage ?? null,
+    availableOn,
+    description: stripHtml(unit.body || unit.highlight || ""),
+    facts,
+    flags: uniqueValues([
+      unit.featured === "Yes" ? "Featured" : null,
+      unit.videos ? "Video" : null,
+      unit.three_d_tour_url ? "3D tour" : null,
+      Number(unit.concession_months_free) > 0
+        ? `${Number(unit.concession_months_free)} mo. free`
+        : null,
+    ]),
+    imageUrl: image?.card || image?.src || null,
+    url: makeAbsoluteUrl(unit.url, sourceUrl),
+  };
+}
+
+function parseManhattanSkylineUnits(payload, sourceUrl) {
+  const data = payload?.units?.data || payload?.data || [];
+  return data
+    .map((unit) => normalizeManhattanSkylineUnit(unit, unit.building, sourceUrl))
+    .filter((listing) => listing.url || listing.unit || listing.price);
+}
+
+async function runManhattanSkylineAgent(context, input) {
+  const buildingSlug = buildingSlugFromContext(context, input);
+  if (!buildingSlug) {
+    throw new AgentError("The Manhattan Skyline agent could not infer a building slug.", 400);
+  }
+
+  const buildingUrl = `https://manhattanskyline.com/buildings/soho/${buildingSlug}`;
+  let verifiedBuildingUrl = buildingUrl;
+  let buildingHtml = "";
+  try {
+    buildingHtml = await fetchAgentText(buildingUrl);
+  } catch (error) {
+    if (buildingSlug !== "111-sullivan-street") throw error;
+  }
+
+  const embeddedSlug =
+    buildingHtml.match(/<unit-list[^>]+:params="\{\s*buildings:\s*'([^']+)'/i)?.[1] ||
+    buildingSlug;
+  const apiUrl = `https://manhattanskyline.com/api/units?buildings=${encodeURIComponent(
+    embeddedSlug,
+  )}`;
+  const payload = await fetchAgentJson(apiUrl);
+  const listings = parseManhattanSkylineUnits(payload, apiUrl);
+  if (!listings.length && buildingSlug !== "111-sullivan-street") {
+    const parentUrl = "https://manhattanskyline.com/buildings/soho/111-sullivan-street";
+    const parentHtml = await fetchAgentText(parentUrl);
+    const parentSlug =
+      parentHtml.match(/<unit-list[^>]+:params="\{\s*buildings:\s*'([^']+)'/i)?.[1] ||
+      "111-sullivan-street";
+    const parentApiUrl = `https://manhattanskyline.com/api/units?buildings=${encodeURIComponent(
+      parentSlug,
+    )}`;
+    const parentPayload = await fetchAgentJson(parentApiUrl);
+    verifiedBuildingUrl = parentUrl;
+    return {
+      website: "https://manhattanskyline.com",
+      sourceUrl: parentApiUrl,
+      buildingUrl: verifiedBuildingUrl,
+      listings: parseManhattanSkylineUnits(parentPayload, parentApiUrl),
+      steps: [
+        {
+          agent: "Landlord site agent",
+          status: "complete",
+          detail:
+            "Checked the exact building endpoint, then fell back to the Sullivan Mews portfolio page.",
+          url: parentApiUrl,
+        },
+      ],
+    };
+  }
+
+  return {
+    website: "https://manhattanskyline.com",
+    sourceUrl: apiUrl,
+    buildingUrl: verifiedBuildingUrl,
+    listings,
+    steps: [
+      {
+        agent: "Landlord site agent",
+        status: "complete",
+        detail: "Loaded Manhattan Skyline's public unit API for the inferred building.",
+        url: apiUrl,
+      },
+    ],
+  };
+}
+
+async function findLandlordListings(input) {
+  const key = String(input || "").trim().toLowerCase();
+  if (!key) throw new AgentError("Enter a StreetEasy listing URL or address.", 400);
+
+  const cached = landlordAgentCache.get(key);
+  if (cached && Date.now() - cached.savedAt < LANDLORD_CACHE_TTL_MS) {
+    return { ...cached.value, cached: true };
+  }
+
+  const scout = await runStreetEasyScoutAgent(input);
+  const landlord = inferLandlordFromContext(scout, input);
+  if (!landlord) {
+    throw new AgentError(
+      "The agent could not identify a supported landlord from that listing yet.",
+      422,
+    );
+  }
+
+  let landlordResult;
+  if (/manhattan\s+skyline/i.test(landlord)) {
+    landlordResult = await runManhattanSkylineAgent({ ...scout, landlord }, input);
+  } else {
+    throw new AgentError(`${landlord} is not supported by a landlord-site agent yet.`, 422);
+  }
+
+  const value = {
+    input,
+    landlord,
+    address: scout.address,
+    streetEasyUrl: scout.streetEasyUrl,
+    website: landlordResult.website,
+    buildingUrl: landlordResult.buildingUrl,
+    sourceUrl: landlordResult.sourceUrl,
+    listings: landlordResult.listings,
+    agentSteps: [...(scout.steps || []), ...(landlordResult.steps || [])],
+    generatedAt: new Date().toISOString(),
+    cached: false,
+  };
+  landlordAgentCache.set(key, { savedAt: Date.now(), value });
+  return value;
+}
+
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -828,7 +1260,12 @@ function sendJson(response, status, body, headers = {}) {
 }
 
 function serveStatic(requestPath, response) {
-  const normalizedPath = requestPath === "/" ? "/index.html" : requestPath;
+  const normalizedPath =
+    requestPath === "/"
+      ? "/index.html"
+      : requestPath === "/landlord"
+        ? "/landlord.html"
+        : requestPath;
   const filePath = path.resolve(
     PUBLIC_DIR,
     `.${decodeURIComponent(normalizedPath)}`,
@@ -923,7 +1360,7 @@ function createServer() {
 
     if (
       AUTH_ENABLED &&
-      (["/", "/index.html"].includes(url.pathname) ||
+      (["/", "/index.html", "/landlord", "/landlord.html"].includes(url.pathname) ||
         url.pathname.startsWith("/api/")) &&
       !hasValidSession(request)
     ) {
@@ -980,6 +1417,25 @@ function createServer() {
       return;
     }
 
+    if (url.pathname === "/api/landlord-listings" && request.method === "GET") {
+      try {
+        sendJson(
+          response,
+          200,
+          await findLandlordListings(url.searchParams.get("source") || ""),
+        );
+      } catch (error) {
+        const status = error instanceof AgentError ? error.status : 400;
+        sendJson(response, status, {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The landlord agent could not complete the search.",
+        });
+      }
+      return;
+    }
+
     const listingDetailsMatch = url.pathname.match(
       /^\/api\/listings\/([A-Za-z0-9_-]{1,80})$/,
     );
@@ -1025,8 +1481,11 @@ module.exports = {
   buildSearchQuery,
   createServer,
   decorateListing,
+  findLandlordListings,
   avenueBLongitudeAt,
   latestActiveAt,
+  normalizeStreetSlug,
+  parseManhattanSkylineUnits,
   parseSearchParams,
   passesAvenueBBoundary,
   normalizeUserState,

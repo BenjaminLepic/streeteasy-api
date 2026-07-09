@@ -9,6 +9,8 @@ const {
   avenueBLongitudeAt,
   latestActiveAt,
   normalizeUserState,
+  normalizeStreetSlug,
+  parseManhattanSkylineUnits,
   parseSearchParams,
   passesAvenueBBoundary,
   readUserState,
@@ -134,4 +136,49 @@ test("persists saved listing state across reads", (context) => {
   assert.deepEqual(stored.likedListings, ["5091099"]);
   assert.deepEqual(stored.hiddenListings, ["5091100"]);
   assert.match(stored.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("normalizes a street address into a landlord-site slug", () => {
+  assert.equal(normalizeStreetSlug("117 Sullivan St."), "117-sullivan-street");
+  assert.equal(normalizeStreetSlug("205 E. 66th St"), "205-east-66th-street");
+});
+
+test("normalizes Manhattan Skyline unit feed results", () => {
+  const listings = parseManhattanSkylineUnits(
+    {
+      units: {
+        data: [
+          {
+            number: "3C",
+            slug: "ggtranqx",
+            bedrooms: 1,
+            bathrooms: 1,
+            price: "4495.00",
+            body: "<p>Spacious one-bedroom apartment.</p>",
+            featured: "Yes",
+            videos: "https://vimeo.com/example",
+            url: "https://manhattanskyline.com/buildings/soho/117-sullivan-street/apartment-ggtranqx",
+            building: {
+              name: "117 Sullivan Street",
+              address: { display_name: "Sullivan Mews, New York, NY 10012" },
+            },
+            card_images: [
+              {
+                card: "https://manhattanskyline.com/storage/example.jpg",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    "https://manhattanskyline.com/api/units?buildings=117-sullivan-street",
+  );
+
+  assert.equal(listings.length, 1);
+  assert.equal(listings[0].source, "Manhattan Skyline");
+  assert.equal(listings[0].unit, "#3C");
+  assert.equal(listings[0].price, 4495);
+  assert.deepEqual(listings[0].facts.slice(0, 2), ["1 bed", "1 bath"]);
+  assert.ok(listings[0].flags.includes("Featured"));
+  assert.equal(listings[0].description, "Spacious one-bedroom apartment.");
 });

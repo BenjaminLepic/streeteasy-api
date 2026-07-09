@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="Agent-assisted landlord listing discovery for StreetEasy rentals."
+    />
+    <meta name="theme-color" content="#1749c6" />
+    <title>First Look - landlord agent</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css?v=20260709-agent" />
+    <script src="/landlord.js?v=20260709-agent" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#agent-results">Skip to agent results</a>
+
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="First Look home">
+        <span class="brand-mark" aria-hidden="true">FL</span>
+        <span>
+          <strong>First Look</strong>
+          <small>Landlord agent</small>
+        </span>
+      </a>
+      <nav class="agent-nav" aria-label="Dashboard navigation">
+        <a href="/">Live scan</a>
+      </nav>
+    </header>
+
+    <main class="agent-page">
+      <section class="agent-hero" aria-labelledby="agent-title">
+        <div>
+          <p class="eyebrow">StreetEasy scout + landlord-site agent</p>
+          <h1 id="agent-title">Follow the listing back to the source.</h1>
+          <p>
+            Paste a StreetEasy listing URL or address. The scout identifies the
+            landlord, then the source agent checks the landlord site for current
+            availability.
+          </p>
+        </div>
+        <form class="agent-search" id="agent-form">
+          <label for="agent-source">StreetEasy listing or address</label>
+          <div class="agent-search-row">
+            <input
+              id="agent-source"
+              name="source"
+              type="text"
+              value="117 Sullivan Street"
+              autocomplete="off"
+            />
+            <button class="primary-button" type="submit">Run agent</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="agent-status-panel" aria-live="polite">
+        <div class="sync agent-sync" id="agent-sync">
+          <span class="sync-dot" aria-hidden="true"></span>
+          <span id="agent-sync-label">Ready</span>
+        </div>
+        <div class="notice" id="agent-notice" role="status" hidden></div>
+      </section>
+
+      <section
+        class="agent-results"
+        id="agent-results"
+        aria-labelledby="agent-results-title"
+      >
+        <div class="results-heading">
+          <div class="results-title-group">
+            <p class="section-kicker">Source availability</p>
+            <h2 id="agent-results-title">
+              <span id="agent-result-count">-</span>
+              <span id="agent-result-label">landlord listings</span>
+            </h2>
+          </div>
+          <div class="agent-source-links" id="agent-source-links"></div>
+        </div>
+
+        <div class="agent-summary" id="agent-summary" hidden></div>
+        <ol class="agent-steps" id="agent-steps" aria-label="Agent steps"></ol>
+        <div class="agent-listing-grid" id="agent-listing-grid">
+          <div class="empty-state">
+            <span class="empty-mark" aria-hidden="true">AI</span>
+            <h3>Ready to launch</h3>
+            <p>Start with 117 Sullivan Street or paste another listing.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
